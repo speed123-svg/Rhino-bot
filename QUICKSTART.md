@@ -25,7 +25,6 @@ Fill these values:
 - `ADMIN_ROLE_ID`
 - `VERIFIED_ROLE_ID` if you want the verification button to assign a specific role ID
 - `DATABASE_URL` if you want PostgreSQL storage for modlogs, auto-reactions, and no-link channels
-- `WELCOME_BANNER_URL` if you want a custom banner image on the welcome embed
 - Optional anti-raid tuning:
 - `ANTI_RAID_ENABLED`
 - `ANTI_RAID_JOIN_THRESHOLD`
@@ -98,8 +97,8 @@ You should see logs confirming:
 ## 9. Test verification
 
 1. Create a `Verified` role in Discord, or set `VERIFIED_ROLE_ID` to the role you want to assign
-2. Use `/verificationpanel` to post the Rhino verification panel
-3. Click the `Rhino Verification` button with a test member
+2. Use `/verificationpanel` to post the Northeast Esports verification panel
+3. Click the `Northeast Esports Verification` button with a test member
 4. Confirm the member receives the verified role
 5. Confirm a verification log message appears in `VERIFICATION_LOG_CHANNEL_ID`, or the server-log fallback channel
 

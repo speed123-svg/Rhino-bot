@@ -2,7 +2,7 @@
 
 Last updated: May 21, 2026
 
-These Terms of Service ("Terms") apply to your use of Rhino Bot ("the Bot"), a Discord bot operated for Honor Of Kings | Northeast India community management, moderation, verification, modmail, server utilities, and related Discord server features.
+These Terms of Service ("Terms") apply to your use of Rhino Bot ("the Bot"), a Discord bot operated for Northeast Esports community management, moderation, verification, modmail, server utilities, and related Discord server features.
 
 By using a Discord server where the Bot is installed, interacting with the Bot, using its commands, submitting forms, pressing Bot buttons, or sending messages that the Bot processes, you agree to these Terms. If you do not agree, do not interact with the Bot and contact the server staff if you need your access or data reviewed.
 

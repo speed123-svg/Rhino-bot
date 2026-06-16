@@ -28,14 +28,13 @@ class Settings:
     welcome_channel_id: int = 0
     verified_role_id: int = 0
     database_url: str = ""
-    welcome_banner_url: str = ""
     anti_raid_enabled: bool = True
     anti_raid_join_threshold: int = 5
     anti_raid_window_seconds: int = 20
     anti_raid_lockdown_minutes: int = 10
     anti_raid_account_age_minutes: int = 30
     anti_raid_timeout_minutes: int = 30
-    server_name: str = "Honor Of Kings | Northeast India"
+    server_name: str = "Northeast Esports"
     bot_status_text: str = "Guardian of Northeast Esports"
     server_stats_channel_format: str = "members-{total}"
 
@@ -114,7 +113,6 @@ def load_settings() -> Settings:
         admin_role_id=_require_int("ADMIN_ROLE_ID"),
         verified_role_id=_get_optional_int("VERIFIED_ROLE_ID"),
         database_url=os.getenv("DATABASE_URL", "").strip(),
-        welcome_banner_url=os.getenv("WELCOME_BANNER_URL", "").strip(),
         anti_raid_enabled=_get_bool("ANTI_RAID_ENABLED", True),
         anti_raid_join_threshold=_get_int("ANTI_RAID_JOIN_THRESHOLD", 5, minimum=2),
         anti_raid_window_seconds=_get_int("ANTI_RAID_WINDOW_SECONDS", 20, minimum=5),

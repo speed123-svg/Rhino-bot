@@ -28,18 +28,8 @@ MAX_TIMEOUT_DAYS = 28
 MODMAIL_COOLDOWN_SECONDS = 60
 MODMAIL_INACTIVITY_HOURS = 72
 DM_INTRO_COOLDOWN_SECONDS = 15
-DEFAULT_THUMBNAIL_FILENAME = "lol_bhai_fad_diya.png"
-DEFAULT_THUMBNAIL_PATH = Path(__file__).resolve().parent / "assets" / DEFAULT_THUMBNAIL_FILENAME
-DEFAULT_THUMBNAIL_ATTACHMENT_URL = f"attachment://{DEFAULT_THUMBNAIL_FILENAME}"
-FALLBACK_THUMBNAIL_URL = (
-    "https://cdn.discordapp.com/attachments/1494675962497859624/"
-    "1494773502362783936/hokne_community_logo_realistic.png"
-    "?ex=69e3d3ce&is=69e2824e&hm=7aa24fffd3c796925bc3947573334f7667874f2899c9a72d70aae32c3ee1215a&"
-)
-DEFAULT_THUMBNAIL_URL = (
-    DEFAULT_THUMBNAIL_ATTACHMENT_URL if DEFAULT_THUMBNAIL_PATH.is_file() else FALLBACK_THUMBNAIL_URL
-)
-BRAND_FOOTER = "Rhino Bot of HOK | NE India"
+DEFAULT_THUMBNAIL_URL = "https://raw.githubusercontent.com/speed123-svg/Rhino-bot/main/assets/lol_bhai_fad_diya.png"
+BRAND_FOOTER = "Northeast Esports"
 QOTD_ROLE_NAME = "❓QOTD"
 AUTOREACT_DATA_PATH = Path("autoreact_data.json")
 NO_LINK_DATA_PATH = Path("no_link_channels.json")
@@ -167,20 +157,8 @@ def set_default_thumbnail(embed: discord.Embed) -> None:
     embed.set_thumbnail(url=DEFAULT_THUMBNAIL_URL)
 
 
-def embed_uses_default_thumbnail(embed: discord.Embed) -> bool:
-    return getattr(embed.thumbnail, "url", None) == DEFAULT_THUMBNAIL_ATTACHMENT_URL
-
-
 def build_embed_send_kwargs(embed: discord.Embed, **kwargs) -> dict:
-    send_kwargs = {"embed": embed, **kwargs}
-    if (
-        embed_uses_default_thumbnail(embed)
-        and DEFAULT_THUMBNAIL_PATH.is_file()
-        and "file" not in send_kwargs
-        and "files" not in send_kwargs
-    ):
-        send_kwargs["file"] = discord.File(DEFAULT_THUMBNAIL_PATH, filename=DEFAULT_THUMBNAIL_FILENAME)
-    return send_kwargs
+    return {"embed": embed, **kwargs}
 
 
 def truncate_text(value: str, limit: int = 1000) -> str:
@@ -261,7 +239,7 @@ class VerificationView(discord.ui.View):
         super().__init__(timeout=None)
         self.add_item(
             discord.ui.Button(
-                label="Rhino Verification",
+                label="Northeast Esports Verification",
                 style=discord.ButtonStyle.success,
                 custom_id="verification:start",
             )
@@ -282,9 +260,9 @@ class StaffApplicationPageOneModal(discord.ui.Modal, title="Referee Application 
         max_length=100,
     )
     hok_uid = discord.ui.TextInput(
-        label="3. HOK UID",
+        label="3. Game UID",
         style=discord.TextStyle.short,
-        placeholder="Enter your Honor of Kings UID.",
+        placeholder="Enter your game UID.",
         max_length=100,
     )
     relevant_experience = discord.ui.TextInput(
@@ -296,7 +274,7 @@ class StaffApplicationPageOneModal(discord.ui.Modal, title="Referee Application 
     core_competencies = discord.ui.TextInput(
         label="5. Rules Knowledge",
         style=discord.TextStyle.paragraph,
-        placeholder="Do you know HOK competitive rules? Answer Yes/No and add any context if needed.",
+        placeholder="Do you know the competitive rules? Answer Yes/No and add any context if needed.",
         max_length=1000,
     )
     def __init__(self, bot: "RhinoBot", user_id: int) -> None:
@@ -989,7 +967,7 @@ class RhinoBot(commands.Bot):
         @tree.command(name="help", description="Show the available moderation and modmail commands")
         async def help_command(interaction: discord.Interaction) -> None:
             embed = discord.Embed(
-                title="Rhino Bot Help",
+                title="Northeast Esports Bot Help",
                 description="Moderation and modmail tools available in this server.",
                 color=discord.Color.blurple(),
                 timestamp=utc_now(),
@@ -1025,7 +1003,7 @@ class RhinoBot(commands.Bot):
             )
             embed.add_field(
                 name="Verification",
-                value="`/verificationpanel` post the Rhino verification panel.",
+                value="`/verificationpanel` post the Northeast Esports verification panel.",
                 inline=False,
             )
             embed.add_field(
@@ -1187,7 +1165,7 @@ class RhinoBot(commands.Bot):
 
         tree.add_command(staffapplypanel)
 
-        @tree.command(name="verificationpanel", description="Post the Rhino verification panel")
+        @tree.command(name="verificationpanel", description="Post the Northeast Esports verification panel")
         @app_commands.describe(channel="Channel where the verification panel should be posted")
         async def verificationpanel(
             interaction: discord.Interaction,
@@ -1375,7 +1353,7 @@ class RhinoBot(commands.Bot):
 
     def create_staff_application_panel_embed(self) -> discord.Embed:
         embed = make_embed(
-            "Honor of Kings | Northeast India",
+            "Northeast Esports",
             (
                 "**Crimson Cup - Referee Application**\n\n"
                 "Apply to become a tournament referee for Crimson Cup.\n\n"
@@ -1389,9 +1367,9 @@ class RhinoBot(commands.Bot):
             value=(
                 "1. Discord Username\n"
                 "2. IGN\n"
-                "3. HOK UID\n"
+                "3. Game UID\n"
                 "4. Tournament / Referee Experience\n"
-                "5. Knowledge of HOK Competitive Rules\n"
+                "5. Knowledge of Competitive Rules\n"
                 "6. Skills\n"
                 "7. Available Days & Time\n"
                 "8. Setup\n"
@@ -1410,11 +1388,11 @@ class RhinoBot(commands.Bot):
         verified_role = self.get_verified_role(guild)
         verified_role_text = verified_role.mention if verified_role is not None else "@Verified"
         return make_embed(
-            "Rhino Verification",
+            "Northeast Esports Verification",
             (
                 "Welcome! To unlock full access to the server, simply complete a quick verification.\n\n"
                 "**How It Works**\n"
-                "- Tap the Rhino Verification button below\n"
+                "- Tap the Northeast Esports Verification button below\n"
                 "- Verification will be completed instantly\n\n"
                 "**After Verification**\n"
                 f"- You will receive the {verified_role_text} role\n"
@@ -1426,7 +1404,7 @@ class RhinoBot(commands.Bot):
                 "Quick | Simple | Secure"
             ),
             discord.Color.green(),
-            footer="Honor Of Kings | Northeast India - Verification",
+            footer="Northeast Esports - Verification",
         )
 
     def get_verified_role(self, guild: discord.Guild) -> Optional[discord.Role]:
@@ -1512,9 +1490,9 @@ class RhinoBot(commands.Bot):
             timestamp=utc_now(),
         )
         embed.description = (
-            "✨ 👑 **Welcome to Honor Of Kings | Northeast India** 👑 ✨\n\n"
+            "✨ 👑 **Welcome to Northeast Esports** 👑 ✨\n\n"
             f"Hey {member.mention}, welcome to the community! ⚔️\n"
-            "Get ready to battle, squad up, and connect with players across Northeast India.\n\n"
+            "Get ready to battle, squad up, and connect with the Northeast Esports community.\n\n"
             f"<a:arrow_arrow:1505550701843976412> Verify yourself in {verify_channel}\n"
             f"<a:arrow_arrow:1505550701843976412> Read {server_info_channel} for rules & updates\n"
             f"<a:arrow_arrow:1505550701843976412> Introduce yourself in {intro_channel}\n"
@@ -1523,10 +1501,7 @@ class RhinoBot(commands.Bot):
             "🔥 **Play • Compete • Conquer** 🔥"
         )
         embed.set_footer(text=BRAND_FOOTER)
-        if self.settings.welcome_banner_url:
-            embed.set_image(url=self.settings.welcome_banner_url)
-        else:
-            set_default_thumbnail(embed)
+        set_default_thumbnail(embed)
         return embed
 
     async def send_welcome_message(self, member: discord.Member) -> None:
@@ -1551,9 +1526,9 @@ class RhinoBot(commands.Bot):
         embed.add_field(name="Server", value=guild.name if guild else "Direct Message", inline=False)
         embed.add_field(name="Discord Username", value=draft.motivation, inline=False)
         embed.add_field(name="IGN", value=draft.role_specific_responsibilities, inline=False)
-        embed.add_field(name="HOK UID", value=draft.situational_assessment, inline=False)
+        embed.add_field(name="Game UID", value=draft.situational_assessment, inline=False)
         embed.add_field(name="Tournament / Referee Experience", value=draft.relevant_experience, inline=False)
-        embed.add_field(name="Knowledge of HOK Competitive Rules", value=draft.core_competencies, inline=False)
+        embed.add_field(name="Knowledge of Competitive Rules", value=draft.core_competencies, inline=False)
         embed.add_field(name="Skills", value=draft.decision_making_and_judgment, inline=False)
         embed.add_field(name="Available Days & Time", value=draft.activity_and_availability, inline=False)
         embed.add_field(name="Setup", value=draft.selected_role, inline=False)
@@ -3742,7 +3717,7 @@ class RhinoBot(commands.Bot):
     async def handle_prefix_help(self, context: commands.Context) -> None:
         prefix = self.get_guild_prefix(context.guild.id) if context.guild is not None else DEFAULT_COMMAND_PREFIX
         embed = discord.Embed(
-            title="Rhino Bot Prefix Commands",
+            title="Northeast Esports Prefix Commands",
             description=(
                 f"Current prefix: {self.format_prefix_for_display(prefix)}\n"
                 "Mentioning the bot also works as a prefix."
@@ -4374,7 +4349,7 @@ class RhinoBot(commands.Bot):
             if not message.embeds:
                 continue
             embed = message.embeds[0]
-            if embed.title != "Honor of Kings | Northeast India":
+            if embed.title != "Northeast Esports":
                 continue
             if not message.components:
                 continue
@@ -4524,7 +4499,7 @@ class RhinoBot(commands.Bot):
             return
 
         try:
-            await interaction.user.add_roles(role, reason="Rhino verification completed")
+            await interaction.user.add_roles(role, reason="Northeast Esports verification completed")
         except discord.HTTPException:
             LOGGER.exception("Failed to assign verified role to %s in guild %s", interaction.user.id, interaction.guild.id)
             await self.send_interaction_message(

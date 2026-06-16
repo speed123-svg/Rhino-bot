@@ -7,7 +7,7 @@ Python Discord bot for moderation, verification, modmail, staff applications, an
 - Slash commands: `help`, `warn`, `mute`, `kick`, `ban`, `unban`, `addrole`, `removerole`, `clear`, `modlogs`, `afk`, `prefix ...`, `verificationpanel`, `staffapplypanel` (`post` and `disable`), `qotd`, `embed`, `autoreact ...`, `nolink ...`, and `antiraid ...`
 - Prefix commands: `help`, `afk`, and `prefix` with per-server `set`, `show`, and `reset`
 - DM-based modmail with an `Open Modmail` button
-- Persistent Rhino verification panel that assigns the `Verified` role
+- Persistent Northeast Esports verification panel that assigns the `Verified` role
 - Forum-thread modmail relay between moderators and users
 - Moderation log history for `/modlogs`, stored in PostgreSQL when `DATABASE_URL` is configured
 - Server activity logs for message deletes and edits, bulk deletes, invites, moderator commands, member updates, role changes, channel changes, emoji changes, voice joins, leaves and moves, and ban or unban events
@@ -68,7 +68,6 @@ Enable these intents for the bot:
 - Set `WELCOME_CHANNEL_ID` if you want automatic welcome messages for new members in a dedicated text channel.
 - Set `VERIFIED_ROLE_ID` if you want the verification button to target a specific role ID. If it is not set, the bot falls back to a role named `Verified`.
 - Set `DATABASE_URL` if you want persistent PostgreSQL storage for moderation logs, auto-reaction rules, no-link channels, AFK statuses, and command prefixes.
-- Set `WELCOME_BANNER_URL` if you want a custom image banner on the welcome embed.
 - Without `DATABASE_URL`, auto-reaction rules are stored in `autoreact_data.json`, no-link channel rules are stored in `no_link_channels.json`, AFK statuses are stored in `afk_data.json`, command prefixes are stored in `prefix_data.json`, and moderation logs stay in memory until restart.
 - With `DATABASE_URL`, the bot seeds PostgreSQL from those local JSON files when the database tables are empty.
 

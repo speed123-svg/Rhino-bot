@@ -2,7 +2,7 @@
 
 Last updated: June 16, 2026
 
-This Privacy Policy explains how Rhino Bot ("the Bot") processes information when it is used in Discord servers for Honor Of Kings | Northeast India community management, moderation, verification, modmail, server utilities, and related Discord server features.
+This Privacy Policy explains how Rhino Bot ("the Bot") processes information when it is used in Discord servers for Northeast Esports community management, moderation, verification, modmail, server utilities, and related Discord server features.
 
 The Bot is operated by the server owner, administrators, and authorized staff for the Discord server where it is installed. The Bot is not affiliated with, endorsed by, or sponsored by Discord Inc.
 
