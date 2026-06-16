@@ -27,6 +27,8 @@ Rhino-Bot/
 |-- requirements.txt
 |-- .env
 |-- .env.example
+|-- PRIVACY_POLICY.md
+|-- TERMS_OF_SERVICE.md
 `-- README.md
 ```
 
@@ -69,3 +71,8 @@ Enable these intents for the bot:
 - Set `WELCOME_BANNER_URL` if you want a custom image banner on the welcome embed.
 - Without `DATABASE_URL`, auto-reaction rules are stored in `autoreact_data.json`, no-link channel rules are stored in `no_link_channels.json`, AFK statuses are stored in `afk_data.json`, command prefixes are stored in `prefix_data.json`, and moderation logs stay in memory until restart.
 - With `DATABASE_URL`, the bot seeds PostgreSQL from those local JSON files when the database tables are empty.
+
+## Legal
+
+- Terms of Service: `TERMS_OF_SERVICE.md`
+- Privacy Policy: `PRIVACY_POLICY.md`
