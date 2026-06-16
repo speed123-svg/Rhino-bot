@@ -977,11 +977,13 @@ class RhinoBot(commands.Bot):
                 value=(
                     "`/warn` warn a member\n"
                     "`/mute` timeout a member\n"
+                    "`/unmute` remove a member timeout\n"
                     "`/kick` kick a member\n"
                     "`/ban` ban a member\n"
                     "`/unban` unban by user ID\n"
                     "`/addrole` add a role to a member\n"
                     "`/removerole` remove a role from a member\n"
+                    "`/role add` or `/role remove` manage member roles\n"
                     "`/clear` bulk delete messages\n"
                     "`/modlogs` view moderation history"
                 ),
@@ -1068,6 +1070,11 @@ class RhinoBot(commands.Bot):
         ) -> None:
             await self.handle_mute(interaction, user, duration, reason or "No reason provided")
 
+        @tree.command(name="unmute", description="Remove a member timeout")
+        @app_commands.describe(user="Member to unmute", reason="Reason for removing the timeout")
+        async def unmute(interaction: discord.Interaction, user: discord.Member, reason: Optional[str] = None) -> None:
+            await self.handle_unmute(interaction, user, reason or "No reason provided")
+
         @tree.command(name="kick", description="Kick a member")
         @app_commands.describe(user="Member to kick", reason="Reason for the kick")
         async def kick(interaction: discord.Interaction, user: discord.Member, reason: Optional[str] = None) -> None:
@@ -1107,6 +1114,28 @@ class RhinoBot(commands.Bot):
             reason: Optional[str] = None,
         ) -> None:
             await self.handle_role_remove(interaction, user, role, reason or "No reason provided")
+
+        role_group = app_commands.Group(name="role", description="Add or remove member roles")
+
+        @role_group.command(name="add", description="Add a role to a member")
+        @app_commands.describe(user="Member to update", role="Role to add", reason="Reason for adding the role")
+        async def role_add(
+            interaction: discord.Interaction,
+            user: discord.Member,
+            role: discord.Role,
+            reason: Optional[str] = None,
+        ) -> None:
+            await self.handle_role_add(interaction, user, role, reason or "No reason provided", command_name="/role add")
+
+        @role_group.command(name="remove", description="Remove a role from a member")
+        @app_commands.describe(user="Member to update", role="Role to remove", reason="Reason for removing the role")
+        async def role_remove(
+            interaction: discord.Interaction,
+            user: discord.Member,
+            role: discord.Role,
+            reason: Optional[str] = None,
+        ) -> None:
+            await self.handle_role_remove(interaction, user, role, reason or "No reason provided", command_name="/role remove")
 
         @tree.command(name="clear", description="Bulk delete recent messages")
         @app_commands.describe(amount="How many recent messages to remove", user="Only remove messages from this user")
@@ -1261,6 +1290,7 @@ class RhinoBot(commands.Bot):
         tree.add_command(autoreact)
         tree.add_command(no_link)
         tree.add_command(prefix_group)
+        tree.add_command(role_group)
 
     def register_prefix_commands(self) -> None:
         if self.get_command("help") is not None:
@@ -1547,6 +1577,7 @@ class RhinoBot(commands.Bot):
         colors = {
             "WARN": discord.Color.yellow(),
             "MUTE": discord.Color.orange(),
+            "UNMUTE": discord.Color.green(),
             "KICK": discord.Color.red(),
             "BAN": discord.Color.dark_red(),
             "UNBAN": discord.Color.green(),
@@ -3402,6 +3433,40 @@ class RhinoBot(commands.Bot):
         await self.log_moderator_command(interaction, "/mute", user, f"{reason} | Duration: {format_duration(duration)}")
         await self.send_interaction_message(interaction, embed=embed, ephemeral=True)
 
+    async def handle_unmute(self, interaction: discord.Interaction, user: discord.Member, reason: str) -> None:
+        if not await self.ensure_staff(interaction, "moderate_members"):
+            return
+        moderator = interaction.user
+        if not isinstance(moderator, discord.Member):
+            await interaction.response.send_message(NO_PERMISSION, ephemeral=True)
+            return
+        blocked_reason = self.can_act_on_target(moderator, user)
+        if blocked_reason:
+            await interaction.response.send_message(blocked_reason, ephemeral=True)
+            return
+
+        timed_out_until = user.timed_out_until
+        if timed_out_until is None or timed_out_until <= utc_now():
+            await interaction.response.send_message(f"{user.mention} is not currently timed out.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        await user.timeout(None, reason=reason)
+        await self.safe_dm(
+            user,
+            make_embed(
+                "Timeout Removed",
+                f"Your timeout in **{interaction.guild.name}** has been removed.\n\nReason: {reason}",
+                discord.Color.green(),
+            ),
+        )
+
+        embed = self.create_modlog_embed("UNMUTE", user, interaction.user, reason)
+        await self.send_modlog(embed)
+        await self.add_modlog("UNMUTE", user, interaction.user, interaction.guild.id if interaction.guild else None, reason)
+        await self.log_moderator_command(interaction, "/unmute", user, reason)
+        await self.send_interaction_message(interaction, embed=embed, ephemeral=True)
+
     async def handle_kick(self, interaction: discord.Interaction, user: discord.Member, reason: str) -> None:
         if not await self.ensure_staff(interaction, "kick_members"):
             return
@@ -3490,6 +3555,8 @@ class RhinoBot(commands.Bot):
         user: discord.Member,
         role: discord.Role,
         reason: str,
+        *,
+        command_name: str = "/addrole",
     ) -> None:
         if not await self.ensure_staff(interaction, "manage_roles"):
             return
@@ -3517,7 +3584,7 @@ class RhinoBot(commands.Bot):
             interaction.guild.id if interaction.guild else None,
             f"{reason} | Role: {role.name}",
         )
-        await self.log_moderator_command(interaction, "/addrole", user, f"{reason} | Role: {role.name}")
+        await self.log_moderator_command(interaction, command_name, user, f"{reason} | Role: {role.name}")
         await interaction.followup.send(f"Added {role.mention} to {user.mention}.", ephemeral=True)
 
     async def handle_role_remove(
@@ -3526,6 +3593,8 @@ class RhinoBot(commands.Bot):
         user: discord.Member,
         role: discord.Role,
         reason: str,
+        *,
+        command_name: str = "/removerole",
     ) -> None:
         if not await self.ensure_staff(interaction, "manage_roles"):
             return
@@ -3553,7 +3622,7 @@ class RhinoBot(commands.Bot):
             interaction.guild.id if interaction.guild else None,
             f"{reason} | Role: {role.name}",
         )
-        await self.log_moderator_command(interaction, "/removerole", user, f"{reason} | Role: {role.name}")
+        await self.log_moderator_command(interaction, command_name, user, f"{reason} | Role: {role.name}")
         await interaction.followup.send(f"Removed {role.mention} from {user.mention}.", ephemeral=True)
 
     async def handle_clear(self, interaction: discord.Interaction, amount: int, user: Optional[discord.Member]) -> None:

@@ -4,7 +4,7 @@ Python Discord bot for moderation, verification, modmail, staff applications, an
 
 ## Features
 
-- Slash commands: `help`, `warn`, `mute`, `kick`, `ban`, `unban`, `addrole`, `removerole`, `clear`, `modlogs`, `afk`, `prefix ...`, `verificationpanel`, `staffapplypanel` (`post` and `disable`), `qotd`, `embed`, `autoreact ...`, `nolink ...`, and `antiraid ...`
+- Slash commands: `help`, `warn`, `mute`, `unmute`, `kick`, `ban`, `unban`, `addrole`, `removerole`, `role add`, `role remove`, `clear`, `modlogs`, `afk`, `prefix ...`, `verificationpanel`, `staffapplypanel` (`post` and `disable`), `qotd`, `embed`, `autoreact ...`, `nolink ...`, and `antiraid ...`
 - Prefix commands: `help`, `afk`, and `prefix` with per-server `set`, `show`, and `reset`
 - DM-based modmail with an `Open Modmail` button
 - Persistent Northeast Esports verification panel that assigns the `Verified` role
