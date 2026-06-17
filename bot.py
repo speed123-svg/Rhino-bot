@@ -47,7 +47,21 @@ DISCORD_RATE_LIMIT_STATUS = 429
 DISCORD_UNKNOWN_INTERACTION_CODE = 10062
 DISCORD_INTERACTION_ACKNOWLEDGED_CODE = 40060
 URL_RE = re.compile(
-    r"(?i)\b(?:https?://|www\.|discord\.gg/|discord(?:app)?\.com/invite/)\S+"
+    r"""
+    (?:
+        \b(?:https?://|www\.)[^\s<>()]+
+        |
+        \bdiscord(?:app)?\.com/invite/[^\s<>()]+
+        |
+        \bdiscord\.gg/[^\s<>()]+
+        |
+        (?<![@\w.-])
+        (?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+
+        (?:com|net|org|io|gg|co|me|dev|app|xyz|in|us|uk|ca|au|de|jp|fr|ru|br|info|biz|tv|to|ly|link|site|online|store|shop|cloud|ai)
+        (?:[/?#][^\s<>()]*)?
+    )
+    """,
+    re.IGNORECASE | re.VERBOSE,
 )
 
 
@@ -3654,8 +3668,6 @@ class RhinoBot(commands.Bot):
     async def handle_no_link_message(self, message: discord.Message) -> bool:
         if message.guild is None or not isinstance(message.channel, discord.TextChannel):
             return False
-        if message.author.guild_permissions.manage_messages:
-            return False
 
         blocked_channels = self.no_link_channels.get(message.guild.id, set())
         if message.channel.id not in blocked_channels:
@@ -4778,6 +4790,33 @@ class RhinoBot(commands.Bot):
             else:
                 await interaction.response.send_message("Please choose a text channel for no-link mode.", ephemeral=True)
                 return
+
+        bot_member = interaction.guild.me
+        if bot_member is None and self.user is not None:
+            bot_member = interaction.guild.get_member(self.user.id)
+        if bot_member is None:
+            await interaction.response.send_message("I could not verify my channel permissions right now.", ephemeral=True)
+            return
+
+        permissions = target_channel.permissions_for(bot_member)
+        if not permissions.view_channel:
+            await interaction.response.send_message(
+                f"I do not have permission to view {target_channel.mention}.",
+                ephemeral=True,
+            )
+            return
+        if not permissions.manage_messages:
+            await interaction.response.send_message(
+                f"I need `Manage Messages` in {target_channel.mention} before no-link mode can delete links there.",
+                ephemeral=True,
+            )
+            return
+        if not permissions.send_messages:
+            await interaction.response.send_message(
+                f"I need `Send Messages` in {target_channel.mention} so I can warn members when links are deleted.",
+                ephemeral=True,
+            )
+            return
 
         blocked_channels = self.no_link_channels.setdefault(interaction.guild.id, set())
         if target_channel.id in blocked_channels:
