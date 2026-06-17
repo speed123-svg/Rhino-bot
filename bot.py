@@ -41,6 +41,7 @@ AFK_REASON_LIMIT = 200
 AFK_MENTION_REPLY_LIMIT = 5
 DEFAULT_COMMAND_PREFIX = "!"
 MAX_COMMAND_PREFIX_LENGTH = 10
+REACTION_ROLE_FIELD_NAME = "Reaction Roles"
 SERVER_STATS_RENAME_COOLDOWN_SECONDS = 660
 CHANNEL_SEND_THROTTLE_SECONDS = 1.1
 DISCORD_RATE_LIMIT_STATUS = 429
@@ -3790,6 +3791,69 @@ class RhinoBot(commands.Bot):
 
         return make_embed("Reaction Roles", truncate_text("\n".join(lines), 4000), discord.Color.blurple())
 
+    def create_reaction_role_instruction_value(self, guild: discord.Guild, message_id: int) -> Optional[str]:
+        emoji_configs = self.reaction_role_configs.get(guild.id, {}).get(message_id, {})
+        if not emoji_configs:
+            return None
+
+        lines = []
+        for emoji, config in sorted(emoji_configs.items()):
+            role = guild.get_role(config.role_id)
+            role_text = role.mention if role is not None else f"`{config.role_id}`"
+            lines.append(f"React with {emoji} to get {role_text}.")
+        lines.append("Remove your reaction to remove the role.")
+        return truncate_text("\n".join(lines), 1024)
+
+    def create_updated_reaction_role_embed(
+        self,
+        message: discord.Message,
+        guild: discord.Guild,
+    ) -> tuple[List[discord.Embed], bool]:
+        embeds = [embed.copy() for embed in message.embeds]
+        if embeds:
+            embed = embeds[0]
+        else:
+            embed = make_embed(
+                "Reaction Roles",
+                "React below to pick up roles.",
+                discord.Color.blurple(),
+            )
+            embeds.append(embed)
+
+        fields = [
+            (field.name, field.value, field.inline)
+            for field in embed.fields
+            if str(field.name).lower() != REACTION_ROLE_FIELD_NAME.lower()
+        ]
+        embed.clear_fields()
+        for name, value, inline in fields:
+            embed.add_field(name=name, value=value, inline=inline)
+
+        instruction_value = self.create_reaction_role_instruction_value(guild, message.id)
+        if instruction_value is not None:
+            embed.add_field(name=REACTION_ROLE_FIELD_NAME, value=instruction_value, inline=False)
+
+        embeds[0] = embed
+        return embeds[:10], instruction_value is not None
+
+    async def update_reaction_role_message_embed(
+        self,
+        message: discord.Message,
+        guild: discord.Guild,
+    ) -> tuple[bool, Optional[str]]:
+        if self.user is None or message.author.id != self.user.id:
+            return False, "I can only edit reaction-role instructions on messages I sent."
+
+        embeds, _has_instruction = self.create_updated_reaction_role_embed(message, guild)
+        try:
+            await message.edit(embeds=embeds)
+        except discord.Forbidden:
+            return False, "I do not have permission to edit that message."
+        except discord.HTTPException:
+            LOGGER.exception("Failed to update reaction-role embed on message %s", message.id)
+            return False, "I could not update that message embed right now."
+        return True, None
+
     async def fetch_reaction_role_message(
         self,
         channel: discord.TextChannel,
@@ -4576,6 +4640,12 @@ class RhinoBot(commands.Bot):
                 ephemeral=True,
             )
             return
+        if not permissions.embed_links:
+            await interaction.response.send_message(
+                f"I need `Embed Links` in {target_channel.mention} so I can update the reaction-role instructions.",
+                ephemeral=True,
+            )
+            return
 
         if not await self.defer_interaction_once(interaction, ephemeral=True, thinking=True):
             return
@@ -4674,6 +4744,12 @@ class RhinoBot(commands.Bot):
                 ephemeral=True,
             )
             return
+        if not permissions.embed_links:
+            await interaction.response.send_message(
+                f"I need `Embed Links` in {target_channel.mention} so I can update the reaction-role instructions.",
+                ephemeral=True,
+            )
+            return
 
         if not await self.defer_interaction_once(interaction, ephemeral=True, thinking=True):
             return
@@ -4701,9 +4777,13 @@ class RhinoBot(commands.Bot):
             normalized_emoji,
             role.id,
         )
+        embed_updated, embed_error = await self.update_reaction_role_message_embed(message, interaction.guild)
         action = "Updated" if existing is not None else "Added"
+        embed_note = " Updated the message embed with reaction instructions."
+        if not embed_updated:
+            embed_note = f" The reaction was added, but the embed was not updated: {embed_error}"
         await interaction.followup.send(
-            f"{action} reaction role in {target_channel.mention}: {normalized_emoji} gives {role.mention}.",
+            f"{action} reaction role in {target_channel.mention}: {normalized_emoji} gives {role.mention}.{embed_note}",
             ephemeral=True,
         )
 
@@ -4750,6 +4830,7 @@ class RhinoBot(commands.Bot):
                 fetched_channel = None
             channel = fetched_channel if isinstance(fetched_channel, discord.TextChannel) else None
 
+        embed_note = ""
         if isinstance(channel, discord.TextChannel) and self.user is not None:
             message, _error = await self.fetch_reaction_role_message(channel, parsed_message_id)
             if message is not None:
@@ -4761,9 +4842,14 @@ class RhinoBot(commands.Bot):
                         normalized_emoji,
                         parsed_message_id,
                     )
+                embed_updated, embed_error = await self.update_reaction_role_message_embed(message, interaction.guild)
+                if embed_updated:
+                    embed_note = " Updated the message embed."
+                else:
+                    embed_note = f" The embed was not updated: {embed_error}"
 
         await interaction.followup.send(
-            f"Removed reaction-role binding for {normalized_emoji} on message `{parsed_message_id}`.",
+            f"Removed reaction-role binding for {normalized_emoji} on message `{parsed_message_id}`.{embed_note}",
             ephemeral=True,
         )
 
