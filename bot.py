@@ -42,6 +42,8 @@ AFK_MENTION_REPLY_LIMIT = 5
 DEFAULT_COMMAND_PREFIX = "!"
 MAX_COMMAND_PREFIX_LENGTH = 10
 REACTION_ROLE_FIELD_NAME = "Reaction Roles"
+REACTION_ROLE_REMOVE_HINT = "Remove your reaction to remove the role."
+REACTION_ROLE_GENERIC_DESCRIPTION = "React below to pick up roles."
 SERVER_STATS_RENAME_COOLDOWN_SECONDS = 660
 CHANNEL_SEND_THROTTLE_SECONDS = 1.1
 DISCORD_RATE_LIMIT_STATUS = 429
@@ -3765,13 +3767,13 @@ class RhinoBot(commands.Bot):
     ) -> discord.Embed:
         cleaned_title = truncate_text(normalize_optional_text(title or "") or "Reaction Role", 256)
         cleaned_description = normalize_optional_text(description or "")
+        instruction = f"React with {emoji} to get {role.mention}.\n{REACTION_ROLE_REMOVE_HINT}"
         if cleaned_description is None:
-            cleaned_description = f"React with {emoji} to get {role.mention}.\nRemove your reaction to remove the role."
+            cleaned_description = instruction
+        elif REACTION_ROLE_REMOVE_HINT not in cleaned_description:
+            cleaned_description = f"{cleaned_description}\n\n{instruction}"
 
-        embed = make_embed(cleaned_title, truncate_text(cleaned_description, 4000), discord.Color.blurple())
-        embed.add_field(name="Role", value=role.mention, inline=True)
-        embed.add_field(name="Emoji", value=emoji, inline=True)
-        return embed
+        return make_embed(cleaned_title, truncate_text(cleaned_description, 4000), discord.Color.blurple())
 
     def create_reaction_role_list_embed(self, guild: discord.Guild) -> discord.Embed:
         guild_configs = self.reaction_role_configs.get(guild.id, {})
@@ -3801,8 +3803,18 @@ class RhinoBot(commands.Bot):
             role = guild.get_role(config.role_id)
             role_text = role.mention if role is not None else f"`{config.role_id}`"
             lines.append(f"React with {emoji} to get {role_text}.")
-        lines.append("Remove your reaction to remove the role.")
+        lines.append(REACTION_ROLE_REMOVE_HINT)
         return truncate_text("\n".join(lines), 1024)
+
+    def is_generated_reaction_role_panel_embed(self, embed: discord.Embed) -> bool:
+        title = (embed.title or "").strip().lower()
+        description = embed.description or ""
+        field_names = {str(field.name).strip().lower() for field in embed.fields}
+        return (
+            title in {"reaction role", "reaction roles"}
+            or REACTION_ROLE_REMOVE_HINT in description
+            or {"role", "emoji"}.issubset(field_names)
+        )
 
     def create_updated_reaction_role_embed(
         self,
@@ -3815,22 +3827,26 @@ class RhinoBot(commands.Bot):
         else:
             embed = make_embed(
                 "Reaction Roles",
-                "React below to pick up roles.",
+                REACTION_ROLE_GENERIC_DESCRIPTION,
                 discord.Color.blurple(),
             )
             embeds.append(embed)
 
+        is_generated_panel = self.is_generated_reaction_role_panel_embed(embed)
         fields = [
             (field.name, field.value, field.inline)
             for field in embed.fields
-            if str(field.name).lower() != REACTION_ROLE_FIELD_NAME.lower()
+            if str(field.name).strip().lower() != REACTION_ROLE_FIELD_NAME.lower()
+            and not (is_generated_panel and str(field.name).strip().lower() in {"role", "emoji"})
         ]
         embed.clear_fields()
         for name, value, inline in fields:
             embed.add_field(name=name, value=value, inline=inline)
 
         instruction_value = self.create_reaction_role_instruction_value(guild, message.id)
-        if instruction_value is not None:
+        if is_generated_panel:
+            embed.description = instruction_value or REACTION_ROLE_GENERIC_DESCRIPTION
+        elif instruction_value is not None:
             embed.add_field(name=REACTION_ROLE_FIELD_NAME, value=instruction_value, inline=False)
 
         embeds[0] = embed
