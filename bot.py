@@ -923,6 +923,9 @@ class RhinoBot(commands.Bot):
 
     async def on_message_edit(self, before: discord.Message, after: discord.Message) -> None:
         await self.log_message_edit(before, after)
+        if after.author.bot:
+            return
+        await self.handle_no_link_message(after)
 
     async def on_guild_channel_create(self, channel: discord.abc.GuildChannel) -> None:
         await self.log_channel_event("Channel Created", channel, discord.Color.green())
