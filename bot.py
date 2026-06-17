@@ -32,6 +32,7 @@ DEFAULT_THUMBNAIL_URL = "https://raw.githubusercontent.com/speed123-svg/Rhino-bo
 BRAND_FOOTER = "Northeast Esports"
 QOTD_ROLE_NAME = "❓QOTD"
 AUTOREACT_DATA_PATH = Path("autoreact_data.json")
+REACTION_ROLE_DATA_PATH = Path("reaction_roles.json")
 NO_LINK_DATA_PATH = Path("no_link_channels.json")
 AFK_DATA_PATH = Path("afk_data.json")
 PREFIX_DATA_PATH = Path("prefix_data.json")
@@ -104,6 +105,14 @@ class AntiRaidState:
 @dataclass
 class AutoReactionConfig:
     emojis: List[str] = field(default_factory=list)
+
+
+@dataclass
+class ReactionRoleConfig:
+    channel_id: int
+    message_id: int
+    emoji: str
+    role_id: int
 
 
 def utc_now() -> datetime:
@@ -555,6 +564,7 @@ class RhinoBot(commands.Bot):
         self.mod_logs: List[ModLogEntry] = []
         self.anti_raid_states: Dict[int, AntiRaidState] = {}
         self.autoreact_configs: Dict[int, Dict[int, AutoReactionConfig]] = {}
+        self.reaction_role_configs: Dict[int, Dict[int, Dict[str, ReactionRoleConfig]]] = {}
         self.no_link_channels: Dict[int, set[int]] = {}
         self.afk_statuses: Dict[int, Dict[int, AFKStatus]] = {}
         self.command_prefixes: Dict[int, str] = {}
@@ -581,6 +591,7 @@ class RhinoBot(commands.Bot):
             await asyncio.to_thread(self.ensure_postgres_schema)
         await self.load_prefix_data()
         await self.load_autoreact_data()
+        await self.load_reaction_role_data()
         await self.load_no_link_data()
         await self.load_afk_data()
         self.register_commands()
@@ -623,6 +634,18 @@ class RhinoBot(commands.Bot):
                             channel_id BIGINT NOT NULL,
                             emojis TEXT[] NOT NULL,
                             PRIMARY KEY (guild_id, channel_id)
+                        )
+                        """
+                    )
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS reaction_role_configs (
+                            guild_id BIGINT NOT NULL,
+                            channel_id BIGINT NOT NULL,
+                            message_id BIGINT NOT NULL,
+                            emoji TEXT NOT NULL,
+                            role_id BIGINT NOT NULL,
+                            PRIMARY KEY (guild_id, message_id, emoji)
                         )
                         """
                     )
@@ -848,6 +871,12 @@ class RhinoBot(commands.Bot):
         if isinstance(message.channel, discord.Thread):
             await self.handle_moderator_reply(message)
 
+    async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
+        await self.handle_reaction_role_payload(payload, add_role=True)
+
+    async def on_raw_reaction_remove(self, payload: discord.RawReactionActionEvent) -> None:
+        await self.handle_reaction_role_payload(payload, add_role=False)
+
     async def on_member_join(self, member: discord.Member) -> None:
         if member.guild is None:
             return
@@ -1036,6 +1065,16 @@ class RhinoBot(commands.Bot):
                 value=(
                     "`/autoreact activate` react to every message in a channel\n"
                     "`/autoreact deactivate` turn off auto-reactions in a channel"
+                ),
+                inline=False,
+            )
+            embed.add_field(
+                name="Reaction Roles",
+                value=(
+                    "`/reactionrole create` post a new reaction-role panel\n"
+                    "`/reactionrole add` bind a role to an existing message reaction\n"
+                    "`/reactionrole remove` delete a reaction-role binding\n"
+                    "`/reactionrole list` show active reaction roles"
                 ),
                 inline=False,
             )
@@ -1246,6 +1285,58 @@ class RhinoBot(commands.Bot):
         ) -> None:
             await self.handle_autoreact_deactivate(interaction, channel)
 
+        reaction_role = app_commands.Group(name="reactionrole", description="Manage reaction role messages")
+
+        @reaction_role.command(name="create", description="Post a new reaction-role panel")
+        @app_commands.describe(
+            role="Role members receive when they react",
+            emoji="Emoji members should react with",
+            channel="Channel where the panel should be posted",
+            title="Optional panel title",
+            description="Optional panel text",
+        )
+        async def reactionrole_create(
+            interaction: discord.Interaction,
+            role: discord.Role,
+            emoji: str,
+            channel: Optional[discord.TextChannel] = None,
+            title: Optional[str] = None,
+            description: Optional[str] = None,
+        ) -> None:
+            await self.handle_reaction_role_create(interaction, role, emoji, channel, title, description)
+
+        @reaction_role.command(name="add", description="Bind a role to a reaction on an existing message")
+        @app_commands.describe(
+            message_id="Message ID or message link to bind",
+            emoji="Emoji members should react with",
+            role="Role members receive when they react",
+            channel="Channel containing the message",
+        )
+        async def reactionrole_add(
+            interaction: discord.Interaction,
+            message_id: str,
+            emoji: str,
+            role: discord.Role,
+            channel: Optional[discord.TextChannel] = None,
+        ) -> None:
+            await self.handle_reaction_role_add(interaction, message_id, emoji, role, channel)
+
+        @reaction_role.command(name="remove", description="Remove a reaction-role binding")
+        @app_commands.describe(
+            message_id="Message ID or message link to unbind",
+            emoji="Emoji to unbind",
+        )
+        async def reactionrole_remove(
+            interaction: discord.Interaction,
+            message_id: str,
+            emoji: str,
+        ) -> None:
+            await self.handle_reaction_role_remove(interaction, message_id, emoji)
+
+        @reaction_role.command(name="list", description="Show active reaction-role bindings")
+        async def reactionrole_list(interaction: discord.Interaction) -> None:
+            await self.handle_reaction_role_list(interaction)
+
         no_link = app_commands.Group(name="nolink", description="Manage link blocking in channels")
 
         @no_link.command(name="activate", description="Delete link messages in a channel")
@@ -1288,6 +1379,7 @@ class RhinoBot(commands.Bot):
 
         tree.add_command(anti_raid)
         tree.add_command(autoreact)
+        tree.add_command(reaction_role)
         tree.add_command(no_link)
         tree.add_command(prefix_group)
         tree.add_command(role_group)
@@ -2859,6 +2951,312 @@ class RhinoBot(commands.Bot):
     async def persist_autoreact_data(self) -> None:
         await asyncio.to_thread(self.save_autoreact_data)
 
+    async def load_reaction_role_data(self) -> None:
+        self.reaction_role_configs = await asyncio.to_thread(self._load_reaction_role_data_sync)
+
+    def _load_reaction_role_data_sync(self) -> Dict[int, Dict[int, Dict[str, ReactionRoleConfig]]]:
+        if self.uses_postgres:
+            loaded_data = self._load_reaction_role_data_from_postgres()
+            if loaded_data:
+                return loaded_data
+
+            fallback_data = self._load_reaction_role_data_from_json()
+            if fallback_data:
+                self._save_reaction_role_data_to_postgres(fallback_data)
+                LOGGER.info("Seeded PostgreSQL reaction-role data from %s", REACTION_ROLE_DATA_PATH)
+            return fallback_data
+
+        return self._load_reaction_role_data_from_json()
+
+    def _store_reaction_role_config(
+        self,
+        configs: Dict[int, Dict[int, Dict[str, ReactionRoleConfig]]],
+        guild_id: object,
+        channel_id: object,
+        message_id: object,
+        emoji: object,
+        role_id: object,
+    ) -> None:
+        try:
+            parsed_guild_id = int(guild_id)
+            parsed_channel_id = int(channel_id)
+            parsed_message_id = int(message_id)
+            parsed_role_id = int(role_id)
+        except (TypeError, ValueError):
+            return
+
+        if parsed_guild_id <= 0 or parsed_channel_id <= 0 or parsed_message_id <= 0 or parsed_role_id <= 0:
+            return
+
+        normalized_emoji = self.normalize_reaction_role_emoji(str(emoji))
+        if normalized_emoji is None:
+            return
+
+        configs.setdefault(parsed_guild_id, {}).setdefault(parsed_message_id, {})[normalized_emoji] = ReactionRoleConfig(
+            channel_id=parsed_channel_id,
+            message_id=parsed_message_id,
+            emoji=normalized_emoji,
+            role_id=parsed_role_id,
+        )
+
+    def _load_reaction_role_data_from_json(self) -> Dict[int, Dict[int, Dict[str, ReactionRoleConfig]]]:
+        loaded_data: Dict[int, Dict[int, Dict[str, ReactionRoleConfig]]] = {}
+        if not REACTION_ROLE_DATA_PATH.exists():
+            LOGGER.info("Reaction-role data file %s not found. A new one will be created on first use.", REACTION_ROLE_DATA_PATH)
+            return loaded_data
+
+        try:
+            raw = json.loads(REACTION_ROLE_DATA_PATH.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            LOGGER.exception("Failed to load reaction-role data from %s", REACTION_ROLE_DATA_PATH)
+            return loaded_data
+
+        for guild_id, messages in (raw if isinstance(raw, dict) else {}).items():
+            if not isinstance(messages, dict):
+                continue
+
+            for message_id, payload in messages.items():
+                if not isinstance(payload, dict):
+                    continue
+                channel_id = payload.get("channel_id")
+                emoji_roles = payload.get("emoji_roles", {})
+                if isinstance(emoji_roles, dict):
+                    for emoji, role_id in emoji_roles.items():
+                        self._store_reaction_role_config(
+                            loaded_data,
+                            guild_id,
+                            channel_id,
+                            message_id,
+                            emoji,
+                            role_id,
+                        )
+
+        LOGGER.info("Loaded reaction-role data for %s guild(s) from %s", len(loaded_data), REACTION_ROLE_DATA_PATH)
+        return loaded_data
+
+    def _load_reaction_role_data_from_postgres(self) -> Dict[int, Dict[int, Dict[str, ReactionRoleConfig]]]:
+        loaded_data: Dict[int, Dict[int, Dict[str, ReactionRoleConfig]]] = {}
+        try:
+            with psycopg.connect(self.settings.database_url) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT guild_id, channel_id, message_id, emoji, role_id
+                        FROM reaction_role_configs
+                        """
+                    )
+                    for guild_id, channel_id, message_id, emoji, role_id in cur.fetchall():
+                        self._store_reaction_role_config(
+                            loaded_data,
+                            guild_id,
+                            channel_id,
+                            message_id,
+                            emoji,
+                            role_id,
+                        )
+        except Exception:
+            LOGGER.exception("Failed to load reaction-role data from PostgreSQL.")
+            return {}
+
+        LOGGER.info("Loaded reaction-role data for %s guild(s) from PostgreSQL", len(loaded_data))
+        return loaded_data
+
+    def save_reaction_role_data(self) -> None:
+        if self.uses_postgres:
+            self._save_reaction_role_data_to_postgres(self.reaction_role_configs)
+            return
+        self._save_reaction_role_data_to_json(self.reaction_role_configs)
+
+    def _save_reaction_role_data_to_json(
+        self,
+        configs: Dict[int, Dict[int, Dict[str, ReactionRoleConfig]]],
+    ) -> None:
+        serialized: Dict[str, Dict[str, dict]] = {}
+        for guild_id, message_configs in configs.items():
+            serialized_messages: Dict[str, dict] = {}
+            for message_id, emoji_configs in message_configs.items():
+                if not emoji_configs:
+                    continue
+                first_config = next(iter(emoji_configs.values()))
+                serialized_messages[str(message_id)] = {
+                    "channel_id": first_config.channel_id,
+                    "emoji_roles": {
+                        emoji: config.role_id
+                        for emoji, config in emoji_configs.items()
+                    },
+                }
+            if serialized_messages:
+                serialized[str(guild_id)] = serialized_messages
+
+        try:
+            REACTION_ROLE_DATA_PATH.write_text(json.dumps(serialized, indent=2), encoding="utf-8")
+        except OSError:
+            LOGGER.exception("Failed to save reaction-role data to %s", REACTION_ROLE_DATA_PATH)
+
+    def _save_reaction_role_data_to_postgres(
+        self,
+        configs: Dict[int, Dict[int, Dict[str, ReactionRoleConfig]]],
+    ) -> None:
+        rows = [
+            (guild_id, config.channel_id, message_id, emoji, config.role_id)
+            for guild_id, message_configs in configs.items()
+            for message_id, emoji_configs in message_configs.items()
+            for emoji, config in emoji_configs.items()
+        ]
+        try:
+            with psycopg.connect(self.settings.database_url) as conn:
+                with conn.cursor() as cur:
+                    cur.execute("DELETE FROM reaction_role_configs")
+                    if rows:
+                        cur.executemany(
+                            """
+                            INSERT INTO reaction_role_configs (guild_id, channel_id, message_id, emoji, role_id)
+                            VALUES (%s, %s, %s, %s, %s)
+                            """,
+                            rows,
+                        )
+                conn.commit()
+        except Exception:
+            LOGGER.exception("Failed to save reaction-role data to PostgreSQL.")
+
+    async def persist_reaction_role_data(self) -> None:
+        await asyncio.to_thread(self.save_reaction_role_data)
+
+    def normalize_reaction_role_emoji(self, value: str) -> Optional[str]:
+        return self.normalize_autoreact_emoji(value)
+
+    @staticmethod
+    def parse_reaction_role_message_id(value: str) -> Optional[int]:
+        cleaned = value.strip()
+        if cleaned.isdigit():
+            return int(cleaned)
+
+        match = re.search(r"/(\d{15,25})(?:\?.*)?$", cleaned)
+        if match:
+            return int(match.group(1))
+        return None
+
+    def get_reaction_role_configs(self, guild_id: int) -> Dict[int, Dict[str, ReactionRoleConfig]]:
+        return self.reaction_role_configs.setdefault(guild_id, {})
+
+    def get_reaction_role_config(
+        self,
+        guild_id: int,
+        message_id: int,
+        emoji: str,
+    ) -> Optional[ReactionRoleConfig]:
+        return self.reaction_role_configs.get(guild_id, {}).get(message_id, {}).get(emoji)
+
+    async def set_reaction_role_config(
+        self,
+        guild_id: int,
+        channel_id: int,
+        message_id: int,
+        emoji: str,
+        role_id: int,
+    ) -> ReactionRoleConfig:
+        config = ReactionRoleConfig(
+            channel_id=channel_id,
+            message_id=message_id,
+            emoji=emoji,
+            role_id=role_id,
+        )
+        self.get_reaction_role_configs(guild_id).setdefault(message_id, {})[emoji] = config
+        await self.persist_reaction_role_data()
+        return config
+
+    async def remove_reaction_role_config(self, guild_id: int, message_id: int, emoji: str) -> Optional[ReactionRoleConfig]:
+        guild_configs = self.reaction_role_configs.get(guild_id)
+        if not guild_configs:
+            return None
+
+        emoji_configs = guild_configs.get(message_id)
+        if not emoji_configs:
+            return None
+
+        removed = emoji_configs.pop(emoji, None)
+        if not emoji_configs:
+            guild_configs.pop(message_id, None)
+        if not guild_configs:
+            self.reaction_role_configs.pop(guild_id, None)
+        if removed is not None:
+            await self.persist_reaction_role_data()
+        return removed
+
+    async def get_reaction_role_member(
+        self,
+        guild: discord.Guild,
+        payload: discord.RawReactionActionEvent,
+    ) -> Optional[discord.Member]:
+        payload_member = getattr(payload, "member", None)
+        if isinstance(payload_member, discord.Member):
+            return payload_member
+
+        member = guild.get_member(payload.user_id)
+        if member is not None:
+            return member
+
+        try:
+            return await guild.fetch_member(payload.user_id)
+        except discord.HTTPException:
+            LOGGER.warning("Could not fetch reaction-role member %s in guild %s", payload.user_id, guild.id)
+            return None
+
+    async def handle_reaction_role_payload(
+        self,
+        payload: discord.RawReactionActionEvent,
+        *,
+        add_role: bool,
+    ) -> None:
+        if payload.guild_id is None:
+            return
+        if self.user is not None and payload.user_id == self.user.id:
+            return
+
+        emoji = self.normalize_reaction_role_emoji(str(payload.emoji))
+        if emoji is None:
+            return
+
+        config = self.get_reaction_role_config(payload.guild_id, payload.message_id, emoji)
+        if config is None:
+            return
+
+        guild = self.get_guild(payload.guild_id)
+        if guild is None:
+            return
+
+        role = guild.get_role(config.role_id)
+        if role is None:
+            LOGGER.warning(
+                "Reaction-role target role %s was not found in guild %s for message %s",
+                config.role_id,
+                guild.id,
+                config.message_id,
+            )
+            return
+
+        member = await self.get_reaction_role_member(guild, payload)
+        if member is None or member.bot:
+            return
+
+        reason = f"Reaction role {emoji} on message {config.message_id}"
+        try:
+            if add_role:
+                if role not in member.roles:
+                    await member.add_roles(role, reason=reason)
+                return
+
+            if role in member.roles:
+                await member.remove_roles(role, reason=reason)
+        except discord.HTTPException:
+            LOGGER.exception(
+                "Failed to %s reaction role %s for member %s in guild %s",
+                "add" if add_role else "remove",
+                role.id,
+                member.id,
+                guild.id,
+            )
+
     async def handle_autoreactions(self, message: discord.Message) -> None:
         if message.guild is None:
             return
@@ -3336,6 +3734,68 @@ class RhinoBot(commands.Bot):
             lines.append(f"Channel: <#{channel_id}> | Emojis: {' '.join(config.emojis)}")
 
         return make_embed("Auto-Reactions", "\n".join(lines), discord.Color.blurple())
+
+    def create_reaction_role_panel_embed(
+        self,
+        role: discord.Role,
+        emoji: str,
+        title: Optional[str],
+        description: Optional[str],
+    ) -> discord.Embed:
+        cleaned_title = truncate_text(normalize_optional_text(title or "") or "Reaction Role", 256)
+        cleaned_description = normalize_optional_text(description or "")
+        if cleaned_description is None:
+            cleaned_description = f"React with {emoji} to get {role.mention}.\nRemove your reaction to remove the role."
+
+        embed = make_embed(cleaned_title, truncate_text(cleaned_description, 4000), discord.Color.blurple())
+        embed.add_field(name="Role", value=role.mention, inline=True)
+        embed.add_field(name="Emoji", value=emoji, inline=True)
+        return embed
+
+    def create_reaction_role_list_embed(self, guild: discord.Guild) -> discord.Embed:
+        guild_configs = self.reaction_role_configs.get(guild.id, {})
+        if not guild_configs:
+            return make_embed(
+                "Reaction Roles",
+                "No reaction-role bindings are configured for this server yet.",
+                discord.Color.blurple(),
+            )
+
+        lines = []
+        for message_id, emoji_configs in sorted(guild_configs.items()):
+            for emoji, config in sorted(emoji_configs.items()):
+                role = guild.get_role(config.role_id)
+                role_text = role.mention if role is not None else f"`{config.role_id}`"
+                lines.append(f"{emoji} -> {role_text} in <#{config.channel_id}> (`{message_id}`)")
+
+        return make_embed("Reaction Roles", truncate_text("\n".join(lines), 4000), discord.Color.blurple())
+
+    async def fetch_reaction_role_message(
+        self,
+        channel: discord.TextChannel,
+        message_id: int,
+    ) -> tuple[Optional[discord.Message], Optional[str]]:
+        try:
+            return await channel.fetch_message(message_id), None
+        except discord.NotFound:
+            return None, f"I could not find message `{message_id}` in {channel.mention}."
+        except discord.Forbidden:
+            return None, f"I do not have permission to read message history in {channel.mention}."
+        except discord.HTTPException:
+            LOGGER.exception("Failed to fetch reaction-role message %s in channel %s", message_id, channel.id)
+            return None, "I could not fetch that message right now. Please try again."
+
+    async def resolve_reaction_role_channel(
+        self,
+        interaction: discord.Interaction,
+        channel: Optional[discord.TextChannel],
+    ) -> Optional[discord.TextChannel]:
+        if channel is not None:
+            return channel
+        if isinstance(interaction.channel, discord.TextChannel):
+            return interaction.channel
+        await self.send_interaction_message(interaction, "Please choose a text channel.", ephemeral=True)
+        return None
 
     def get_qotd_role(self, guild: discord.Guild) -> Optional[discord.Role]:
         return discord.utils.get(guild.roles, name=QOTD_ROLE_NAME)
@@ -4039,6 +4499,264 @@ class RhinoBot(commands.Bot):
         await self.persist_autoreact_data()
         await interaction.response.send_message(
             f"Auto-reaction deactivated in {target_channel.mention}.",
+            ephemeral=True,
+        )
+
+    async def handle_reaction_role_create(
+        self,
+        interaction: discord.Interaction,
+        role: discord.Role,
+        emoji: str,
+        channel: Optional[discord.TextChannel],
+        title: Optional[str],
+        description: Optional[str],
+    ) -> None:
+        if not await self.ensure_staff(interaction, "manage_roles"):
+            return
+        if interaction.guild is None:
+            await interaction.response.send_message("This command can only be used inside a server.", ephemeral=True)
+            return
+
+        moderator = interaction.user if isinstance(interaction.user, discord.Member) else None
+        if moderator is None:
+            await interaction.response.send_message(NO_PERMISSION, ephemeral=True)
+            return
+
+        normalized_emoji = self.normalize_reaction_role_emoji(emoji)
+        if normalized_emoji is None:
+            await interaction.response.send_message("Please provide a valid emoji.", ephemeral=True)
+            return
+
+        role_error = self.can_manage_role(moderator, role)
+        if role_error is not None:
+            await interaction.response.send_message(role_error, ephemeral=True)
+            return
+
+        target_channel = await self.resolve_reaction_role_channel(interaction, channel)
+        if target_channel is None:
+            return
+
+        bot_member = interaction.guild.me
+        if bot_member is None and self.user is not None:
+            bot_member = interaction.guild.get_member(self.user.id)
+        if bot_member is None:
+            await interaction.response.send_message("I could not verify my channel permissions right now.", ephemeral=True)
+            return
+
+        permissions = target_channel.permissions_for(bot_member)
+        if not permissions.send_messages:
+            await interaction.response.send_message(
+                f"I do not have permission to send messages in {target_channel.mention}.",
+                ephemeral=True,
+            )
+            return
+        if not permissions.add_reactions:
+            await interaction.response.send_message(
+                f"I do not have permission to add reactions in {target_channel.mention}.",
+                ephemeral=True,
+            )
+            return
+
+        if not await self.defer_interaction_once(interaction, ephemeral=True, thinking=True):
+            return
+
+        embed = self.create_reaction_role_panel_embed(role, normalized_emoji, title, description)
+        try:
+            message = await target_channel.send(
+                embed=embed,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except discord.HTTPException:
+            LOGGER.exception("Failed to send reaction-role panel in channel %s", target_channel.id)
+            await interaction.followup.send(
+                f"I could not send the reaction-role panel in {target_channel.mention}.",
+                ephemeral=True,
+            )
+            return
+
+        try:
+            await message.add_reaction(normalized_emoji)
+        except discord.HTTPException:
+            LOGGER.exception("Failed to add reaction-role emoji %s to message %s", normalized_emoji, message.id)
+            await interaction.followup.send(
+                "The panel was posted, but I could not add that emoji, so no reaction role was saved.",
+                ephemeral=True,
+            )
+            return
+
+        await self.set_reaction_role_config(
+            interaction.guild.id,
+            target_channel.id,
+            message.id,
+            normalized_emoji,
+            role.id,
+        )
+        await interaction.followup.send(
+            f"Reaction role created in {target_channel.mention}: {normalized_emoji} gives {role.mention}.",
+            ephemeral=True,
+        )
+
+    async def handle_reaction_role_add(
+        self,
+        interaction: discord.Interaction,
+        message_id: str,
+        emoji: str,
+        role: discord.Role,
+        channel: Optional[discord.TextChannel],
+    ) -> None:
+        if not await self.ensure_staff(interaction, "manage_roles"):
+            return
+        if interaction.guild is None:
+            await interaction.response.send_message("This command can only be used inside a server.", ephemeral=True)
+            return
+
+        moderator = interaction.user if isinstance(interaction.user, discord.Member) else None
+        if moderator is None:
+            await interaction.response.send_message(NO_PERMISSION, ephemeral=True)
+            return
+
+        parsed_message_id = self.parse_reaction_role_message_id(message_id)
+        if parsed_message_id is None:
+            await interaction.response.send_message("Please provide a valid message ID or message link.", ephemeral=True)
+            return
+
+        normalized_emoji = self.normalize_reaction_role_emoji(emoji)
+        if normalized_emoji is None:
+            await interaction.response.send_message("Please provide a valid emoji.", ephemeral=True)
+            return
+
+        role_error = self.can_manage_role(moderator, role)
+        if role_error is not None:
+            await interaction.response.send_message(role_error, ephemeral=True)
+            return
+
+        target_channel = await self.resolve_reaction_role_channel(interaction, channel)
+        if target_channel is None:
+            return
+
+        bot_member = interaction.guild.me
+        if bot_member is None and self.user is not None:
+            bot_member = interaction.guild.get_member(self.user.id)
+        if bot_member is None:
+            await interaction.response.send_message("I could not verify my channel permissions right now.", ephemeral=True)
+            return
+
+        permissions = target_channel.permissions_for(bot_member)
+        if not permissions.read_message_history:
+            await interaction.response.send_message(
+                f"I do not have permission to read message history in {target_channel.mention}.",
+                ephemeral=True,
+            )
+            return
+        if not permissions.add_reactions:
+            await interaction.response.send_message(
+                f"I do not have permission to add reactions in {target_channel.mention}.",
+                ephemeral=True,
+            )
+            return
+
+        if not await self.defer_interaction_once(interaction, ephemeral=True, thinking=True):
+            return
+
+        message, error = await self.fetch_reaction_role_message(target_channel, parsed_message_id)
+        if message is None:
+            await interaction.followup.send(error or "I could not fetch that message.", ephemeral=True)
+            return
+
+        try:
+            await message.add_reaction(normalized_emoji)
+        except discord.HTTPException:
+            LOGGER.exception("Failed to add reaction-role emoji %s to message %s", normalized_emoji, message.id)
+            await interaction.followup.send(
+                "I could not add that reaction to the message, so no reaction role was saved.",
+                ephemeral=True,
+            )
+            return
+
+        existing = self.get_reaction_role_config(interaction.guild.id, message.id, normalized_emoji)
+        await self.set_reaction_role_config(
+            interaction.guild.id,
+            target_channel.id,
+            message.id,
+            normalized_emoji,
+            role.id,
+        )
+        action = "Updated" if existing is not None else "Added"
+        await interaction.followup.send(
+            f"{action} reaction role in {target_channel.mention}: {normalized_emoji} gives {role.mention}.",
+            ephemeral=True,
+        )
+
+    async def handle_reaction_role_remove(
+        self,
+        interaction: discord.Interaction,
+        message_id: str,
+        emoji: str,
+    ) -> None:
+        if not await self.ensure_staff(interaction, "manage_roles"):
+            return
+        if interaction.guild is None:
+            await interaction.response.send_message("This command can only be used inside a server.", ephemeral=True)
+            return
+
+        parsed_message_id = self.parse_reaction_role_message_id(message_id)
+        if parsed_message_id is None:
+            await interaction.response.send_message("Please provide a valid message ID or message link.", ephemeral=True)
+            return
+
+        normalized_emoji = self.normalize_reaction_role_emoji(emoji)
+        if normalized_emoji is None:
+            await interaction.response.send_message("Please provide a valid emoji.", ephemeral=True)
+            return
+
+        config = self.get_reaction_role_config(interaction.guild.id, parsed_message_id, normalized_emoji)
+        if config is None:
+            await interaction.response.send_message(
+                "No reaction-role binding exists for that message and emoji.",
+                ephemeral=True,
+            )
+            return
+
+        if not await self.defer_interaction_once(interaction, ephemeral=True, thinking=True):
+            return
+
+        await self.remove_reaction_role_config(interaction.guild.id, parsed_message_id, normalized_emoji)
+
+        channel = interaction.guild.get_channel(config.channel_id)
+        if channel is None:
+            try:
+                fetched_channel = await self.fetch_channel(config.channel_id)
+            except discord.HTTPException:
+                fetched_channel = None
+            channel = fetched_channel if isinstance(fetched_channel, discord.TextChannel) else None
+
+        if isinstance(channel, discord.TextChannel) and self.user is not None:
+            message, _error = await self.fetch_reaction_role_message(channel, parsed_message_id)
+            if message is not None:
+                try:
+                    await message.remove_reaction(normalized_emoji, self.user)
+                except discord.HTTPException:
+                    LOGGER.warning(
+                        "Removed reaction-role config but could not remove emoji %s from message %s",
+                        normalized_emoji,
+                        parsed_message_id,
+                    )
+
+        await interaction.followup.send(
+            f"Removed reaction-role binding for {normalized_emoji} on message `{parsed_message_id}`.",
+            ephemeral=True,
+        )
+
+    async def handle_reaction_role_list(self, interaction: discord.Interaction) -> None:
+        if not await self.ensure_staff(interaction, "manage_roles"):
+            return
+        if interaction.guild is None:
+            await interaction.response.send_message("This command can only be used inside a server.", ephemeral=True)
+            return
+
+        await self.send_interaction_message(
+            interaction,
+            embed=self.create_reaction_role_list_embed(interaction.guild),
             ephemeral=True,
         )
 

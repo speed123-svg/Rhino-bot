@@ -55,6 +55,7 @@ Thumbs.db
 level_data.json
 invite_data.json
 autoreact_data.json
+reaction_roles.json
 no_link_channels.json
 afk_data.json
 prefix_data.json
