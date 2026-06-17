@@ -873,8 +873,12 @@ class RhinoBot(commands.Bot):
 
         if message.guild is not None and isinstance(message.author, discord.Member):
             await self.clear_afk_on_message(message)
+
+        if message.guild is not None:
             if await self.handle_no_link_message(message):
                 return
+
+        if message.guild is not None and isinstance(message.author, discord.Member):
             await self.handle_afk_mentions(message)
 
         context = await self.get_context(message)
@@ -3691,8 +3695,9 @@ class RhinoBot(commands.Bot):
 
         try:
             warning = await message.channel.send(
-                f"{message.author.mention} links are not allowed in this channel.",
+                f"{message.author.mention} I removed your message because links are not allowed in this channel.",
                 delete_after=8,
+                allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
             )
             LOGGER.debug("Posted no-link warning message %s", warning.id)
         except discord.HTTPException:
