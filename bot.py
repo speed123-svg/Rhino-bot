@@ -42,6 +42,7 @@ REACTION_ROLE_DATA_PATH = Path("reaction_roles.json")
 NO_LINK_DATA_PATH = Path("no_link_channels.json")
 AFK_DATA_PATH = Path("afk_data.json")
 PREFIX_DATA_PATH = Path("prefix_data.json")
+TICKET_CONFIG_DATA_PATH = Path("ticket_config.json")
 AFK_DEFAULT_REASON = "AFK"
 AFK_REASON_LIMIT = 200
 AFK_MENTION_REPLY_LIMIT = 5
@@ -652,6 +653,7 @@ class RhinoBot(commands.Bot):
         self.no_link_channels: Dict[int, set[int]] = {}
         self.afk_statuses: Dict[int, Dict[int, AFKStatus]] = {}
         self.command_prefixes: Dict[int, str] = {}
+        self.ticket_transcript_channels: Dict[int, int] = {}
         self.server_stats_logged_once = False
         self.server_stats_running = False
         self.stats_channel_last_rename_at: Dict[int, datetime] = {}
@@ -678,6 +680,7 @@ class RhinoBot(commands.Bot):
         if self.uses_postgres:
             await asyncio.to_thread(self.ensure_postgres_schema)
         await self.load_prefix_data()
+        await self.load_ticket_config_data()
         await self.load_autoreact_data()
         await self.load_reaction_role_data()
         await self.load_no_link_data()
@@ -765,6 +768,14 @@ class RhinoBot(commands.Bot):
                         CREATE TABLE IF NOT EXISTS command_prefixes (
                             guild_id BIGINT PRIMARY KEY,
                             prefix TEXT NOT NULL
+                        )
+                        """
+                    )
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS ticket_configs (
+                            guild_id BIGINT PRIMARY KEY,
+                            transcript_channel_id BIGINT NOT NULL
                         )
                         """
                     )
@@ -1144,7 +1155,8 @@ class RhinoBot(commands.Bot):
                 value=(
                     "`/ticket panel` post the ticket panel\n"
                     "`/ticket add` or `/ticket remove` manage participants\n"
-                    "`/ticket claim`, `/ticket transcript`, and `/ticket close` manage an active ticket"
+                    "`/ticket claim`, `/ticket transcript`, and `/ticket close` manage an active ticket\n"
+                    "`/ticket setlog` lets an administrator choose the transcript log channel"
                 ),
                 inline=False,
             )
@@ -1535,6 +1547,11 @@ class RhinoBot(commands.Bot):
         async def ticket_close(interaction: discord.Interaction, reason: Optional[str] = None) -> None:
             await self.close_ticket_from_command(interaction, reason or "Issue resolved")
 
+        @ticket.command(name="setlog", description="Set the channel where closed-ticket transcripts are saved")
+        @app_commands.describe(channel="Private staff channel that should receive ticket transcripts")
+        async def ticket_setlog(interaction: discord.Interaction, channel: discord.TextChannel) -> None:
+            await self.handle_ticket_set_log_channel(interaction, channel)
+
         tree.add_command(anti_raid)
         tree.add_command(ticket)
         tree.add_command(autoreact)
@@ -1577,6 +1594,11 @@ class RhinoBot(commands.Bot):
             return True
 
         return getattr(member.guild_permissions, permission)
+
+    def has_admin_access(self, member: discord.Member) -> bool:
+        if member.guild_permissions.administrator:
+            return True
+        return any(role.id == self.settings.admin_role_id for role in member.roles)
 
     def can_act_on_target(self, moderator: discord.Member, target: discord.Member) -> Optional[str]:
         if moderator.id == target.id:
@@ -3031,6 +3053,99 @@ class RhinoBot(commands.Bot):
     async def reset_guild_prefix(self, guild_id: int) -> None:
         self.command_prefixes.pop(guild_id, None)
         await self.persist_prefix_data()
+
+    async def load_ticket_config_data(self) -> None:
+        self.ticket_transcript_channels = await asyncio.to_thread(self._load_ticket_config_data_sync)
+
+    def _load_ticket_config_data_sync(self) -> Dict[int, int]:
+        if self.uses_postgres:
+            loaded_data = self._load_ticket_config_data_from_postgres()
+            if loaded_data:
+                return loaded_data
+
+            fallback_data = self._load_ticket_config_data_from_json()
+            if fallback_data:
+                self._save_ticket_config_data_to_postgres(fallback_data)
+                LOGGER.info("Seeded PostgreSQL ticket configuration from %s", TICKET_CONFIG_DATA_PATH)
+            return fallback_data
+
+        return self._load_ticket_config_data_from_json()
+
+    def _load_ticket_config_data_from_json(self) -> Dict[int, int]:
+        if not TICKET_CONFIG_DATA_PATH.exists():
+            LOGGER.info(
+                "Ticket configuration file %s not found. A new one will be created when an admin uses /ticket setlog.",
+                TICKET_CONFIG_DATA_PATH,
+            )
+            return {}
+        try:
+            raw = json.loads(TICKET_CONFIG_DATA_PATH.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            LOGGER.exception("Failed to load ticket configuration from %s", TICKET_CONFIG_DATA_PATH)
+            return {}
+
+        loaded_data: Dict[int, int] = {}
+        for guild_id, channel_id in (raw if isinstance(raw, dict) else {}).items():
+            try:
+                parsed_guild_id = int(guild_id)
+                parsed_channel_id = int(channel_id)
+            except (TypeError, ValueError):
+                continue
+            if parsed_guild_id > 0 and parsed_channel_id > 0:
+                loaded_data[parsed_guild_id] = parsed_channel_id
+        LOGGER.info("Loaded ticket configuration for %s guild(s) from %s", len(loaded_data), TICKET_CONFIG_DATA_PATH)
+        return loaded_data
+
+    def _load_ticket_config_data_from_postgres(self) -> Dict[int, int]:
+        loaded_data: Dict[int, int] = {}
+        try:
+            with psycopg.connect(self.settings.database_url) as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT guild_id, transcript_channel_id FROM ticket_configs")
+                    for guild_id, channel_id in cur.fetchall():
+                        loaded_data[int(guild_id)] = int(channel_id)
+        except Exception:
+            LOGGER.exception("Failed to load ticket configuration from PostgreSQL.")
+            return {}
+        LOGGER.info("Loaded ticket configuration for %s guild(s) from PostgreSQL", len(loaded_data))
+        return loaded_data
+
+    def save_ticket_config_data(self) -> None:
+        if self.uses_postgres:
+            self._save_ticket_config_data_to_postgres(self.ticket_transcript_channels)
+            return
+        try:
+            serialized = {
+                str(guild_id): channel_id
+                for guild_id, channel_id in self.ticket_transcript_channels.items()
+            }
+            TICKET_CONFIG_DATA_PATH.write_text(json.dumps(serialized, indent=2), encoding="utf-8")
+        except OSError:
+            LOGGER.exception("Failed to save ticket configuration to %s", TICKET_CONFIG_DATA_PATH)
+
+    def _save_ticket_config_data_to_postgres(self, configs: Dict[int, int]) -> None:
+        try:
+            with psycopg.connect(self.settings.database_url) as conn:
+                with conn.cursor() as cur:
+                    cur.execute("DELETE FROM ticket_configs")
+                    if configs:
+                        cur.executemany(
+                            "INSERT INTO ticket_configs (guild_id, transcript_channel_id) VALUES (%s, %s)",
+                            list(configs.items()),
+                        )
+                conn.commit()
+        except Exception:
+            LOGGER.exception("Failed to save ticket configuration to PostgreSQL.")
+
+    async def persist_ticket_config_data(self) -> None:
+        await asyncio.to_thread(self.save_ticket_config_data)
+
+    def get_ticket_transcript_channel_id(self, guild_id: int) -> int:
+        return (
+            self.ticket_transcript_channels.get(guild_id)
+            or self.settings.ticket_transcript_channel_id
+            or self.settings.mod_log_channel_id
+        )
 
     async def load_autoreact_data(self) -> None:
         self.autoreact_configs = await asyncio.to_thread(self._load_autoreact_data_sync)
@@ -5745,6 +5860,40 @@ class RhinoBot(commands.Bot):
             return
         await self.send_interaction_message(interaction, f"Ticket panel posted in {target.mention}.")
 
+    async def handle_ticket_set_log_channel(
+        self,
+        interaction: discord.Interaction,
+        channel: discord.TextChannel,
+    ) -> None:
+        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+            await self.send_interaction_message(interaction, "This command can only be used in a server.")
+            return
+        if not self.has_admin_access(interaction.user):
+            await self.send_interaction_message(interaction, "Only an administrator can set the ticket transcript channel.")
+            return
+        if channel.guild.id != interaction.guild.id:
+            await self.send_interaction_message(interaction, "Choose a channel from this server.")
+            return
+
+        me = interaction.guild.me
+        if me is None:
+            await self.send_interaction_message(interaction, "I could not verify my channel permissions.")
+            return
+        permissions = channel.permissions_for(me)
+        if not permissions.view_channel or not permissions.send_messages or not permissions.attach_files:
+            await self.send_interaction_message(
+                interaction,
+                "I need View Channel, Send Messages, and Attach Files permissions in that channel.",
+            )
+            return
+
+        self.ticket_transcript_channels[interaction.guild.id] = channel.id
+        await self.persist_ticket_config_data()
+        await self.send_interaction_message(
+            interaction,
+            f"Closed-ticket transcripts will now be saved in {channel.mention}.",
+        )
+
     async def create_ticket_from_button(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None or not isinstance(interaction.user, discord.Member):
             await self.send_interaction_message(interaction, "Tickets can only be opened inside a server.")
@@ -6081,7 +6230,7 @@ Opened: {html.escape(opened_at)} • Exported: {utc_now().strftime('%Y-%m-%d %H:
             discord.Color.red(),
         )
 
-        transcript_channel_id = self.settings.ticket_transcript_channel_id or self.settings.mod_log_channel_id
+        transcript_channel_id = self.get_ticket_transcript_channel_id(interaction.guild.id)
         try:
             transcript_channel = self.get_channel(transcript_channel_id) or await self.fetch_channel(transcript_channel_id)
             if isinstance(transcript_channel, discord.TextChannel):

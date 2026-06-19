@@ -26,7 +26,7 @@ Fill these values:
 - `MODERATOR_ROLE_ID`
 - `ADMIN_ROLE_ID`
 - `VERIFIED_ROLE_ID` if you want the verification button to assign a specific role ID
-- `DATABASE_URL` if you want PostgreSQL storage for modlogs, auto-reactions, and no-link channels
+- `DATABASE_URL` if you want PostgreSQL storage for modlogs and persistent bot settings, including ticket configuration
 - Optional anti-raid tuning:
 - `ANTI_RAID_ENABLED`
 - `ANTI_RAID_JOIN_THRESHOLD`
@@ -118,8 +118,9 @@ You should see logs confirming:
 1. Use `/ticket panel` in a public support channel
 2. Click `Create Ticket` with a test member and confirm only that member and staff can see the new channel
 3. Test `Claim`, `/ticket add`, and `/ticket transcript`
-4. Close the ticket and confirm its HTML transcript appears in `TICKET_TRANSCRIPT_CHANNEL_ID` or `MOD_LOG_CHANNEL_ID`
+4. As an administrator, run `/ticket setlog` and choose a private staff transcript channel
+5. Close the ticket and confirm its HTML transcript appears in the selected channel
 
 ## 12. PostgreSQL note
 
-If `DATABASE_URL` is set, the bot stores moderation logs, auto-reaction rules, and no-link channel rules in PostgreSQL. If those database tables are empty, the bot imports existing local JSON data on startup. Without `DATABASE_URL`, the bot falls back to local JSON files and in-memory modlogs.
+If `DATABASE_URL` is set, the bot stores moderation logs and persistent feature settings, including ticket configuration, in PostgreSQL. If those database tables are empty, the bot imports existing local JSON data on startup. Without `DATABASE_URL`, the bot falls back to local JSON files and in-memory modlogs.

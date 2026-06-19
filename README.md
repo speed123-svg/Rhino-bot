@@ -11,6 +11,7 @@ Python Discord bot for moderation, verification, modmail, private support ticket
 - Forum-thread modmail relay between moderators and users
 - Persistent ticket panel with private per-member channels, staff claiming, participant management, and duplicate-ticket prevention
 - HTML ticket transcripts available on demand and automatically sent to the log channel and ticket opener when a ticket closes
+- Administrator-selected transcript channel through `/ticket setlog`, persisted across bot restarts
 - Moderation log history for `/modlogs`, stored in PostgreSQL when `DATABASE_URL` is configured
 - Server activity logs for message deletes and edits, bulk deletes, invites, moderator commands, member updates, role changes, channel changes, emoji changes, voice joins, leaves and moves, and ban or unban events
 - Staff application panel with a 2-page modal workflow
@@ -19,7 +20,7 @@ Python Discord bot for moderation, verification, modmail, private support ticket
 - AFK statuses with mention replies and automatic clearing when the member sends a message
 - No-link channel protection with per-channel activate and deactivate commands
 - Anti-raid detection for join bursts with temporary raid mode and auto-timeout for suspicious fresh accounts
-- PostgreSQL-backed persistence for modlogs, auto-reactions, reaction roles, no-link channels, AFK statuses, and command prefixes when `DATABASE_URL` is configured
+- PostgreSQL-backed persistence for modlogs, auto-reactions, reaction roles, no-link channels, AFK statuses, command prefixes, and ticket settings when `DATABASE_URL` is configured
 
 ## Project Structure
 
@@ -70,10 +71,11 @@ Enable these intents for the bot:
 - Set `VERIFICATION_LOG_CHANNEL_ID` if you want successful verification logs in a dedicated text channel. If it is not set, verification logs fall back to `SERVER_LOG_CHANNEL_ID`, then `MOD_LOG_CHANNEL_ID`.
 - Set `WELCOME_CHANNEL_ID` if you want automatic welcome messages for new members in a dedicated text channel.
 - Set `TICKET_CATEGORY_ID` to place private ticket channels in a specific category. When omitted, the bot uses or creates a category named `Tickets`.
-- Set `TICKET_TRANSCRIPT_CHANNEL_ID` for closed-ticket transcripts. When omitted, transcripts are sent to `MOD_LOG_CHANNEL_ID`.
+- Administrators can run `/ticket setlog channel:#your-private-log` to choose where closed-ticket transcripts are saved. This server setting overrides `TICKET_TRANSCRIPT_CHANNEL_ID` and persists in PostgreSQL or `ticket_config.json`.
+- `TICKET_TRANSCRIPT_CHANNEL_ID` is the fallback transcript channel. When omitted, transcripts fall back to `MOD_LOG_CHANNEL_ID`.
 - Set `VERIFIED_ROLE_ID` if you want the verification button to target a specific role ID. If it is not set, the bot falls back to a role named `Verified`.
-- Set `DATABASE_URL` if you want persistent PostgreSQL storage for moderation logs, auto-reaction rules, reaction roles, no-link channels, AFK statuses, and command prefixes.
-- Without `DATABASE_URL`, auto-reaction rules are stored in `autoreact_data.json`, reaction roles are stored in `reaction_roles.json`, no-link channel rules are stored in `no_link_channels.json`, AFK statuses are stored in `afk_data.json`, command prefixes are stored in `prefix_data.json`, and moderation logs stay in memory until restart.
+- Set `DATABASE_URL` if you want persistent PostgreSQL storage for moderation logs, auto-reaction rules, reaction roles, no-link channels, AFK statuses, command prefixes, and ticket settings.
+- Without `DATABASE_URL`, auto-reaction rules are stored in `autoreact_data.json`, reaction roles are stored in `reaction_roles.json`, no-link channel rules are stored in `no_link_channels.json`, AFK statuses are stored in `afk_data.json`, command prefixes are stored in `prefix_data.json`, ticket settings are stored in `ticket_config.json`, and moderation logs stay in memory until restart.
 - With `DATABASE_URL`, the bot seeds PostgreSQL from those local JSON files when the database tables are empty.
 
 ## Legal
