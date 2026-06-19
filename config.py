@@ -26,6 +26,8 @@ class Settings:
     invite_log_channel_id: int = 0
     verification_log_channel_id: int = 0
     welcome_channel_id: int = 0
+    ticket_category_id: int = 0
+    ticket_transcript_channel_id: int = 0
     verified_role_id: int = 0
     database_url: str = ""
     anti_raid_enabled: bool = True
@@ -108,6 +110,8 @@ def load_settings() -> Settings:
         invite_log_channel_id=_get_optional_int("INVITE_LOG_CHANNEL_ID"),
         verification_log_channel_id=_get_optional_int("VERIFICATION_LOG_CHANNEL_ID"),
         welcome_channel_id=_get_optional_int("WELCOME_CHANNEL_ID"),
+        ticket_category_id=_get_optional_int("TICKET_CATEGORY_ID"),
+        ticket_transcript_channel_id=_get_optional_int("TICKET_TRANSCRIPT_CHANNEL_ID"),
         staff_application_channel_id=_require_int("STAFF_APPLICATION_CHANNEL_ID"),
         moderator_role_id=_require_int("MODERATOR_ROLE_ID"),
         admin_role_id=_require_int("ADMIN_ROLE_ID"),

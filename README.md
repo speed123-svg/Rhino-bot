@@ -1,14 +1,16 @@
 # Rhino Bot
 
-Python Discord bot for moderation, verification, modmail, staff applications, anti-raid protection, server activity logs, auto-reactions, reaction roles, no-link channels, AFK statuses, configurable prefixes, and QOTD posting.
+Python Discord bot for moderation, verification, modmail, private support tickets, staff applications, anti-raid protection, server activity logs, auto-reactions, reaction roles, no-link channels, AFK statuses, configurable prefixes, and QOTD posting.
 
 ## Features
 
-- Slash commands: `help`, `warn`, `mute`, `unmute`, `kick`, `ban`, `unban`, `addrole`, `removerole`, `role add`, `role remove`, `clear`, `modlogs`, `afk`, `prefix ...`, `verificationpanel`, `staffapplypanel` (`post` and `disable`), `qotd`, `embed`, `autoreact ...`, `reactionrole ...`, `nolink ...`, and `antiraid ...`
+- Slash commands: `help`, `warn`, `mute`, `unmute`, `kick`, `ban`, `unban`, `addrole`, `removerole`, `role add`, `role remove`, `clear`, `modlogs`, `afk`, `prefix ...`, `verificationpanel`, `staffapplypanel` (`post` and `disable`), `ticket ...`, `qotd`, `embed`, `autoreact ...`, `reactionrole ...`, `nolink ...`, and `antiraid ...`
 - Prefix commands: `help`, `afk`, and `prefix` with per-server `set`, `show`, and `reset`
 - DM-based modmail with an `Open Modmail` button
 - Persistent Northeast Esports verification panel that assigns the `Verified` role
 - Forum-thread modmail relay between moderators and users
+- Persistent ticket panel with private per-member channels, staff claiming, participant management, and duplicate-ticket prevention
+- HTML ticket transcripts available on demand and automatically sent to the log channel and ticket opener when a ticket closes
 - Moderation log history for `/modlogs`, stored in PostgreSQL when `DATABASE_URL` is configured
 - Server activity logs for message deletes and edits, bulk deletes, invites, moderator commands, member updates, role changes, channel changes, emoji changes, voice joins, leaves and moves, and ban or unban events
 - Staff application panel with a 2-page modal workflow
@@ -67,6 +69,8 @@ Enable these intents for the bot:
 - Set `INVITE_LOG_CHANNEL_ID` if you want invite create and delete events in a dedicated text channel. If it is not set, invite logs fall back to `SERVER_LOG_CHANNEL_ID`, then `MOD_LOG_CHANNEL_ID`.
 - Set `VERIFICATION_LOG_CHANNEL_ID` if you want successful verification logs in a dedicated text channel. If it is not set, verification logs fall back to `SERVER_LOG_CHANNEL_ID`, then `MOD_LOG_CHANNEL_ID`.
 - Set `WELCOME_CHANNEL_ID` if you want automatic welcome messages for new members in a dedicated text channel.
+- Set `TICKET_CATEGORY_ID` to place private ticket channels in a specific category. When omitted, the bot uses or creates a category named `Tickets`.
+- Set `TICKET_TRANSCRIPT_CHANNEL_ID` for closed-ticket transcripts. When omitted, transcripts are sent to `MOD_LOG_CHANNEL_ID`.
 - Set `VERIFIED_ROLE_ID` if you want the verification button to target a specific role ID. If it is not set, the bot falls back to a role named `Verified`.
 - Set `DATABASE_URL` if you want persistent PostgreSQL storage for moderation logs, auto-reaction rules, reaction roles, no-link channels, AFK statuses, and command prefixes.
 - Without `DATABASE_URL`, auto-reaction rules are stored in `autoreact_data.json`, reaction roles are stored in `reaction_roles.json`, no-link channel rules are stored in `no_link_channels.json`, AFK statuses are stored in `afk_data.json`, command prefixes are stored in `prefix_data.json`, and moderation logs stay in memory until restart.

@@ -20,6 +20,8 @@ Fill these values:
 - `INVITE_LOG_CHANNEL_ID` if you want invite create and delete logs in a separate text channel
 - `VERIFICATION_LOG_CHANNEL_ID` if you want successful verification logs in a separate text channel
 - `WELCOME_CHANNEL_ID` if you want automatic welcome messages in a separate text channel
+- `TICKET_CATEGORY_ID` if you want tickets in a specific category; otherwise the bot uses or creates `Tickets`
+- `TICKET_TRANSCRIPT_CHANNEL_ID` if you want transcripts outside the moderation log channel
 - `STAFF_APPLICATION_CHANNEL_ID`
 - `MODERATOR_ROLE_ID`
 - `ADMIN_ROLE_ID`
@@ -55,6 +57,8 @@ Make sure the bot can:
 - Kick members
 - Ban members
 - Manage messages
+- Manage channels
+- Attach files
 
 ## 5. Start the bot
 
@@ -109,6 +113,13 @@ You should see logs confirming:
 3. Complete the 2-page application form
 4. Use `/staffapplypanel disable` if you need to disable the posted panel later
 
-## 11. PostgreSQL note
+## 11. Test tickets
+
+1. Use `/ticket panel` in a public support channel
+2. Click `Create Ticket` with a test member and confirm only that member and staff can see the new channel
+3. Test `Claim`, `/ticket add`, and `/ticket transcript`
+4. Close the ticket and confirm its HTML transcript appears in `TICKET_TRANSCRIPT_CHANNEL_ID` or `MOD_LOG_CHANNEL_ID`
+
+## 12. PostgreSQL note
 
 If `DATABASE_URL` is set, the bot stores moderation logs, auto-reaction rules, and no-link channel rules in PostgreSQL. If those database tables are empty, the bot imports existing local JSON data on startup. Without `DATABASE_URL`, the bot falls back to local JSON files and in-memory modlogs.

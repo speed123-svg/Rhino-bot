@@ -1,8 +1,8 @@
 # Rhino Bot Terms of Service
 
-Last updated: May 21, 2026
+Last updated: June 19, 2026
 
-These Terms of Service ("Terms") apply to your use of Rhino Bot ("the Bot"), a Discord bot operated for Northeast Esports community management, moderation, verification, modmail, server utilities, and related Discord server features.
+These Terms of Service ("Terms") apply to your use of Rhino Bot ("the Bot"), a Discord bot operated for Northeast Esports community management, moderation, verification, modmail, support tickets, server utilities, and related Discord server features.
 
 By using a Discord server where the Bot is installed, interacting with the Bot, using its commands, submitting forms, pressing Bot buttons, or sending messages that the Bot processes, you agree to these Terms. If you do not agree, do not interact with the Bot and contact the server staff if you need your access or data reviewed.
 
@@ -25,7 +25,7 @@ The Bot may provide features including:
 
 - Moderation commands, such as warnings, timeouts, kicks, bans, unbans, role changes, message clearing, and moderation logs.
 - Verification tools that may assign server roles after a user completes a verification action.
-- Modmail, allowing users to contact server staff through private messages and staff-managed Discord threads.
+- Modmail and private support tickets, allowing users to contact server staff through private messages, staff-managed Discord threads, or restricted ticket channels with transcript exports.
 - Staff or referee application forms submitted through Discord modals.
 - Welcome messages, question-of-the-day posts, automatic reactions, no-link channel controls, anti-raid protections, server statistics, AFK status replies, prefix commands, and server event logs.
 
@@ -57,9 +57,9 @@ If you believe a moderation action was incorrect, contact the server staff throu
 To provide its features, the Bot may process Discord information made available to it through Discord permissions and interactions, including:
 
 - Discord user IDs, usernames, display names, avatars, server IDs, channel IDs, role IDs, message IDs, thread IDs, and timestamps.
-- Message content when needed for enabled features such as modmail, no-link checks, AFK mention replies, message edit or delete logs, moderation context, or staff applications.
+- Message content when needed for enabled features such as modmail, support tickets and transcripts, no-link checks, AFK mention replies, message edit or delete logs, moderation context, or staff applications.
 - Moderation records such as warnings, timeouts, bans, role changes, reasons, moderator IDs, and related timestamps.
-- Verification events, modmail sessions, staff application responses, AFK reasons, custom command prefixes, auto-reaction settings, and no-link channel settings.
+- Verification events, modmail sessions, ticket ownership and claim metadata, staff application responses, AFK reasons, custom command prefixes, auto-reaction settings, and no-link channel settings.
 - Server activity information such as member joins/leaves, role updates, channel updates, invite events, voice state changes, server statistics, and anti-raid events.
 
 The Bot only uses this information to operate its server management, safety, moderation, and community features.
@@ -68,7 +68,7 @@ The Bot only uses this information to operate its server management, safety, mod
 
 Depending on configuration, the Bot may store some data in PostgreSQL or local JSON files controlled by the Bot operator. Some logs may also be posted into Discord channels selected by server administrators.
 
-Stored data may include moderation logs, AFK statuses, command prefixes, auto-reaction settings, no-link channel settings, modmail session metadata, staff application records, and other server-management records.
+Stored data may include moderation logs, AFK statuses, command prefixes, auto-reaction settings, no-link channel settings, modmail session metadata, ticket transcripts, staff application records, and other server-management records.
 
 Retention periods are controlled by the Bot operator and server staff. Some records may be kept as long as needed for moderation, safety, audit, operational, or community-management purposes unless deletion is requested and deletion is reasonably possible.
 

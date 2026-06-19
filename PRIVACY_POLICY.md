@@ -1,8 +1,8 @@
 # Rhino Bot Privacy Policy
 
-Last updated: June 16, 2026
+Last updated: June 19, 2026
 
-This Privacy Policy explains how Rhino Bot ("the Bot") processes information when it is used in Discord servers for Northeast Esports community management, moderation, verification, modmail, server utilities, and related Discord server features.
+This Privacy Policy explains how Rhino Bot ("the Bot") processes information when it is used in Discord servers for Northeast Esports community management, moderation, verification, modmail, support tickets, server utilities, and related Discord server features.
 
 The Bot is operated by the server owner, administrators, and authorized staff for the Discord server where it is installed. The Bot is not affiliated with, endorsed by, or sponsored by Discord Inc.
 
@@ -25,10 +25,10 @@ Discord may separately collect, process, store, and retain data according to Dis
 The Bot may process Discord information that is made available through Discord permissions, server configuration, commands, buttons, modals, direct messages, and normal server activity. This may include:
 
 - Discord user IDs, usernames, display names, avatars, server IDs, channel IDs, role IDs, message IDs, thread IDs, invite codes, and timestamps.
-- Message content when needed for enabled features such as modmail, no-link checks, AFK replies, message edit or delete logs, moderation context, staff applications, and command handling.
-- Attachment names, attachment URLs, and image indicators when messages are logged or relayed by enabled moderation, server-log, or modmail features.
+- Message content when needed for enabled features such as modmail, support tickets and their transcripts, no-link checks, AFK replies, message edit or delete logs, moderation context, staff applications, and command handling.
+- Attachment names, attachment URLs, and image indicators when messages are logged, relayed, or exported by enabled moderation, server-log, modmail, or ticket features.
 - Moderation records such as warnings, timeouts, kicks, bans, unbans, role changes, reasons, moderator IDs, target user IDs, durations, and timestamps.
-- Verification events, modmail session metadata, staff or referee application responses, AFK reasons, custom command prefixes, auto-reaction settings, no-link channel settings, anti-raid events, and server statistics.
+- Verification events, modmail session metadata, ticket ownership and claim metadata, staff or referee application responses, AFK reasons, custom command prefixes, auto-reaction settings, no-link channel settings, anti-raid events, and server statistics.
 - Server activity events such as member joins and leaves, role updates, channel updates, emoji updates, voice state changes, invite create or delete events, message edits, message deletes, and bulk deletes.
 
 The Bot does not ask for Discord passwords, Discord tokens, payment card details, government IDs, health information, or other sensitive information that is not needed for its stated server-management features.
@@ -40,6 +40,7 @@ The Bot uses processed information only to provide and maintain its server-manag
 - Applying moderation actions requested by authorized staff.
 - Sending moderation, verification, invite, server activity, and anti-raid logs to configured Discord channels.
 - Relaying modmail messages between users and server staff.
+- Creating private support channels and exporting ticket messages, attachments, embeds, authors, and timestamps into HTML transcripts for participants and authorized staff.
 - Reviewing staff or referee applications submitted through Bot modals.
 - Assigning verification roles when users complete the verification flow.
 - Detecting and blocking links in configured no-link channels.
@@ -57,7 +58,7 @@ Depending on configuration, the Bot may store some data in:
 - Discord channels, threads, direct messages, forum threads, and audit-style log channels selected by server administrators.
 - Hosting, deployment, database, or logging infrastructure used to run the Bot.
 
-Stored data may include moderation logs, AFK statuses, command prefixes, auto-reaction settings, no-link channel settings, staff application submissions, modmail-related messages, and server-management records.
+Stored data may include moderation logs, AFK statuses, command prefixes, auto-reaction settings, no-link channel settings, staff application submissions, modmail-related messages, ticket transcripts, and server-management records.
 
 Some information is only kept in memory while the Bot is running, such as temporary interaction state, active modmail sessions, application drafts before submission, cooldowns, and anti-raid state.
 
@@ -67,7 +68,7 @@ Retention depends on the feature, server configuration, and operational needs:
 
 - AFK statuses are normally removed when the user sends a message in the server or when the status is otherwise cleared.
 - Staff application drafts are temporary before submission, while submitted applications may remain in the configured review channel.
-- Moderation logs, server logs, modmail records, verification logs, invite logs, and anti-raid records may be kept as long as server staff reasonably need them for moderation, safety, audit, abuse prevention, or server-management purposes.
+- Moderation logs, server logs, modmail records, ticket transcripts, verification logs, invite logs, and anti-raid records may be kept as long as server staff reasonably need them for moderation, support, safety, audit, abuse prevention, or server-management purposes.
 - Auto-reaction, no-link channel, and command-prefix settings may be kept until disabled, reset, deleted, or no longer needed.
 
 Discord may retain messages, logs, attachments, and other content according to Discord's own policies and the settings of the Discord server.
@@ -77,7 +78,7 @@ Discord may retain messages, logs, attachments, and other content according to D
 Information processed by the Bot may be visible to:
 
 - Server administrators, moderators, and authorized staff who manage the Bot or review configured log channels.
-- Users involved in a feature, such as modmail participants or users receiving moderation notices.
+- Users involved in a feature, such as modmail participants, ticket participants, or users receiving moderation notices.
 - Discord, because the Bot operates on Discord.
 - Hosting, database, deployment, or infrastructure providers used to operate the Bot.
 

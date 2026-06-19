@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import html
+import io
 import json
 import logging
 import re
+import zipfile
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Deque, Dict, List, Optional
+from typing import Deque, Dict, List, Optional, Tuple
 
 import discord
 import psycopg
@@ -24,6 +27,9 @@ LOGGER = logging.getLogger("rhino_bot")
 NO_PERMISSION = "You do not have permission to use this command."
 INVALID_DURATION = "Invalid duration format. Use values like 10m, 1h, or 1d."
 MODMAIL_THREAD_RE = re.compile(r"^modmail-(?P<user_id>\d+)$")
+TICKET_TOPIC_RE = re.compile(
+    r"^rhino-ticket owner=(?P<owner_id>\d+) claimed=(?P<claimed_id>\d+) opened=(?P<opened_at>\S+)$"
+)
 MAX_TIMEOUT_DAYS = 28
 MODMAIL_COOLDOWN_SECONDS = 60
 MODMAIL_INACTIVITY_HOURS = 72
@@ -256,6 +262,67 @@ class CloseModmailView(discord.ui.View):
                 label="Close Modmail",
                 style=discord.ButtonStyle.danger,
                 custom_id="modmail:close",
+            )
+        )
+
+
+class TicketPanelView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+        self.add_item(
+            discord.ui.Button(
+                label="Create Ticket",
+                emoji="🎫",
+                style=discord.ButtonStyle.success,
+                custom_id="ticket:create",
+            )
+        )
+
+
+class TicketControlsView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+        self.add_item(
+            discord.ui.Button(
+                label="Claim",
+                emoji="🙋",
+                style=discord.ButtonStyle.primary,
+                custom_id="ticket:claim",
+            )
+        )
+        self.add_item(
+            discord.ui.Button(
+                label="Transcript",
+                emoji="📄",
+                style=discord.ButtonStyle.secondary,
+                custom_id="ticket:transcript",
+            )
+        )
+        self.add_item(
+            discord.ui.Button(
+                label="Close",
+                emoji="🔒",
+                style=discord.ButtonStyle.danger,
+                custom_id="ticket:close",
+            )
+        )
+
+
+class TicketCloseConfirmView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+        self.add_item(
+            discord.ui.Button(
+                label="Confirm Close",
+                style=discord.ButtonStyle.danger,
+                custom_id="ticket:confirm_close",
+            )
+        )
+        self.add_item(
+            discord.ui.Button(
+                label="Cancel",
+                style=discord.ButtonStyle.secondary,
+                custom_id="ticket:cancel_close",
             )
         )
 
@@ -590,11 +657,15 @@ class RhinoBot(commands.Bot):
         self.stats_channel_last_rename_at: Dict[int, datetime] = {}
         self.channel_send_locks: Dict[int, asyncio.Lock] = {}
         self.channel_last_send_at: Dict[int, datetime] = {}
+        self.ticket_creation_locks: Dict[int, asyncio.Lock] = {}
         self.guild_members_chunked: set[int] = set()
         self.previous_server_stats: Dict[int, tuple[Optional[int], Optional[int], int]] = {}
         self.uses_postgres = bool(self.settings.database_url)
         self.modmail_view = OpenModmailView()
         self.close_modmail_view = CloseModmailView()
+        self.ticket_panel_view = TicketPanelView()
+        self.ticket_controls_view = TicketControlsView()
+        self.ticket_close_confirm_view = TicketCloseConfirmView()
         self.verification_view = VerificationView()
         self.staff_application_view = StaffApplicationView()
 
@@ -615,6 +686,9 @@ class RhinoBot(commands.Bot):
         self.register_prefix_commands()
         self.add_view(self.modmail_view)
         self.add_view(self.close_modmail_view)
+        self.add_view(self.ticket_panel_view)
+        self.add_view(self.ticket_controls_view)
+        self.add_view(self.ticket_close_confirm_view)
         self.add_view(self.verification_view)
         self.add_view(self.staff_application_view)
         self.cleanup_inactive_modmail.start()
@@ -994,6 +1068,24 @@ class RhinoBot(commands.Bot):
                 )
                 await self.close_modmail_from_button(interaction)
                 return
+            if custom_id == "ticket:create":
+                await self.create_ticket_from_button(interaction)
+                return
+            if custom_id == "ticket:claim":
+                await self.claim_ticket_from_button(interaction)
+                return
+            if custom_id == "ticket:transcript":
+                await self.send_ticket_transcript(interaction)
+                return
+            if custom_id == "ticket:close":
+                await self.request_ticket_close(interaction)
+                return
+            if custom_id == "ticket:confirm_close":
+                await self.close_ticket_from_button(interaction)
+                return
+            if custom_id == "ticket:cancel_close":
+                await self.cancel_ticket_close(interaction)
+                return
             if custom_id == "staff_application:referee":
                 LOGGER.info("Tournament referee application opened by %s (%s)", interaction.user, interaction.user.id)
                 self.staff_application_drafts[interaction.user.id] = StaffApplicationDraft(selected_role="Tournament Referee")
@@ -1045,6 +1137,15 @@ class RhinoBot(commands.Bot):
             embed.add_field(
                 name="Modmail",
                 value="DM the bot and press `Open Modmail`. Staff can close active threads with the `Close Modmail` button.",
+                inline=False,
+            )
+            embed.add_field(
+                name="Tickets",
+                value=(
+                    "`/ticket panel` post the ticket panel\n"
+                    "`/ticket add` or `/ticket remove` manage participants\n"
+                    "`/ticket claim`, `/ticket transcript`, and `/ticket close` manage an active ticket"
+                ),
                 inline=False,
             )
             embed.add_field(
@@ -1401,7 +1502,41 @@ class RhinoBot(commands.Bot):
         async def antiraid_deactivate(interaction: discord.Interaction) -> None:
             await self.handle_antiraid_deactivate(interaction)
 
+        ticket = app_commands.Group(name="ticket", description="Create and manage private support tickets")
+
+        @ticket.command(name="panel", description="Post the ticket creation panel")
+        @app_commands.describe(channel="Channel where the ticket panel should be posted")
+        async def ticket_panel(
+            interaction: discord.Interaction,
+            channel: Optional[discord.TextChannel] = None,
+        ) -> None:
+            await self.handle_ticket_panel(interaction, channel)
+
+        @ticket.command(name="add", description="Add a member to this ticket")
+        @app_commands.describe(user="Member who should be able to access this ticket")
+        async def ticket_add(interaction: discord.Interaction, user: discord.Member) -> None:
+            await self.handle_ticket_participant(interaction, user, add=True)
+
+        @ticket.command(name="remove", description="Remove a member from this ticket")
+        @app_commands.describe(user="Member whose ticket access should be removed")
+        async def ticket_remove(interaction: discord.Interaction, user: discord.Member) -> None:
+            await self.handle_ticket_participant(interaction, user, add=False)
+
+        @ticket.command(name="claim", description="Claim this ticket as a staff member")
+        async def ticket_claim(interaction: discord.Interaction) -> None:
+            await self.claim_ticket_from_button(interaction)
+
+        @ticket.command(name="transcript", description="Export this ticket as an HTML transcript")
+        async def ticket_transcript(interaction: discord.Interaction) -> None:
+            await self.send_ticket_transcript(interaction)
+
+        @ticket.command(name="close", description="Save a transcript and close this ticket")
+        @app_commands.describe(reason="Reason for closing the ticket")
+        async def ticket_close(interaction: discord.Interaction, reason: Optional[str] = None) -> None:
+            await self.close_ticket_from_command(interaction, reason or "Issue resolved")
+
         tree.add_command(anti_raid)
+        tree.add_command(ticket)
         tree.add_command(autoreact)
         tree.add_command(reaction_role)
         tree.add_command(no_link)
@@ -1682,6 +1817,62 @@ class RhinoBot(commands.Bot):
         embed.set_thumbnail(url=user.display_avatar.url)
         embed.set_footer(text=BRAND_FOOTER)
         return embed
+
+    def create_ticket_panel_embed(self) -> discord.Embed:
+        embed = make_embed(
+            "Support Tickets",
+            (
+                "Need help from the team? Press **Create Ticket** below.\n\n"
+                "A private channel will be created for you and authorized staff. "
+                "Please describe your issue clearly once the ticket opens."
+            ),
+            discord.Color.blurple(),
+        )
+        embed.add_field(
+            name="Privacy",
+            value="Ticket messages may be exported to an HTML transcript when the ticket is closed.",
+            inline=False,
+        )
+        return embed
+
+    @staticmethod
+    def parse_ticket_channel(channel: discord.abc.GuildChannel) -> Optional[Tuple[int, int, str]]:
+        if not isinstance(channel, discord.TextChannel) or not channel.topic:
+            return None
+        match = TICKET_TOPIC_RE.fullmatch(channel.topic)
+        if match is None:
+            return None
+        return (
+            int(match.group("owner_id")),
+            int(match.group("claimed_id")),
+            match.group("opened_at"),
+        )
+
+    @staticmethod
+    def build_ticket_topic(owner_id: int, claimed_id: int, opened_at: str) -> str:
+        return f"rhino-ticket owner={owner_id} claimed={claimed_id} opened={opened_at}"
+
+    async def get_ticket_category(self, guild: discord.Guild) -> discord.CategoryChannel:
+        if self.settings.ticket_category_id:
+            category = guild.get_channel(self.settings.ticket_category_id)
+            if category is None:
+                fetched = await self.fetch_channel(self.settings.ticket_category_id)
+                category = fetched if isinstance(fetched, discord.CategoryChannel) else None
+            if not isinstance(category, discord.CategoryChannel) or category.guild.id != guild.id:
+                raise ValueError("TICKET_CATEGORY_ID does not point to a category in this server.")
+            return category
+
+        existing = discord.utils.find(lambda item: item.name.lower() == "tickets", guild.categories)
+        if existing is not None:
+            return existing
+        return await guild.create_category("Tickets", reason="Ticket system setup")
+
+    def find_open_ticket(self, guild: discord.Guild, owner_id: int) -> Optional[discord.TextChannel]:
+        for channel in guild.text_channels:
+            ticket = self.parse_ticket_channel(channel)
+            if ticket is not None and ticket[0] == owner_id:
+                return channel
+        return None
 
     def create_modlog_embed(
         self,
@@ -5526,6 +5717,419 @@ class RhinoBot(commands.Bot):
             "Your referee application has been submitted successfully.",
             ephemeral=True,
         )
+
+    async def handle_ticket_panel(
+        self,
+        interaction: discord.Interaction,
+        channel: Optional[discord.TextChannel],
+    ) -> None:
+        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+            await self.send_interaction_message(interaction, "This command can only be used in a server.")
+            return
+        if not self.has_staff_access(interaction.user, "manage_channels"):
+            await self.send_interaction_message(interaction, NO_PERMISSION)
+            return
+
+        target = channel or (interaction.channel if isinstance(interaction.channel, discord.TextChannel) else None)
+        if target is None:
+            await self.send_interaction_message(interaction, "Choose a text channel for the ticket panel.")
+            return
+        if not await self.defer_interaction_once(interaction, ephemeral=True, thinking=True):
+            return
+
+        try:
+            await target.send(embed=self.create_ticket_panel_embed(), view=self.ticket_panel_view)
+        except discord.HTTPException:
+            LOGGER.exception("Failed to post ticket panel in channel %s", target.id)
+            await self.send_interaction_message(interaction, "I could not post the ticket panel in that channel.")
+            return
+        await self.send_interaction_message(interaction, f"Ticket panel posted in {target.mention}.")
+
+    async def create_ticket_from_button(self, interaction: discord.Interaction) -> None:
+        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+            await self.send_interaction_message(interaction, "Tickets can only be opened inside a server.")
+            return
+        if interaction.user.bot:
+            await self.send_interaction_message(interaction, "Bots cannot open tickets.")
+            return
+
+        lock = self.ticket_creation_locks.setdefault(interaction.guild.id, asyncio.Lock())
+        async with lock:
+            existing = self.find_open_ticket(interaction.guild, interaction.user.id)
+            if existing is not None:
+                await self.send_interaction_message(
+                    interaction,
+                    f"You already have an open ticket: {existing.mention}",
+                )
+                return
+            if not await self.defer_interaction_once(interaction, ephemeral=True, thinking=True):
+                return
+
+            try:
+                category = await self.get_ticket_category(interaction.guild)
+                overwrites: Dict[discord.abc.Snowflake, discord.PermissionOverwrite] = {
+                    interaction.guild.default_role: discord.PermissionOverwrite(view_channel=False),
+                    interaction.user: discord.PermissionOverwrite(
+                        view_channel=True,
+                        send_messages=True,
+                        read_message_history=True,
+                        attach_files=True,
+                        embed_links=True,
+                    ),
+                }
+                me = interaction.guild.me
+                if me is not None:
+                    overwrites[me] = discord.PermissionOverwrite(
+                        view_channel=True,
+                        send_messages=True,
+                        manage_channels=True,
+                        read_message_history=True,
+                        attach_files=True,
+                    )
+                for role_id in {self.settings.moderator_role_id, self.settings.admin_role_id}:
+                    role = interaction.guild.get_role(role_id)
+                    if role is not None:
+                        overwrites[role] = discord.PermissionOverwrite(
+                            view_channel=True,
+                            send_messages=True,
+                            read_message_history=True,
+                            attach_files=True,
+                            embed_links=True,
+                        )
+
+                user_slug = slugify_text(interaction.user.display_name) or "member"
+                channel_name = f"ticket-{user_slug[:70]}-{str(interaction.user.id)[-4:]}"
+                opened_at = utc_now().isoformat()
+                ticket_channel = await interaction.guild.create_text_channel(
+                    channel_name[:100],
+                    category=category,
+                    topic=self.build_ticket_topic(interaction.user.id, 0, opened_at),
+                    overwrites=overwrites,
+                    reason=f"Ticket opened by {interaction.user} ({interaction.user.id})",
+                )
+            except (discord.HTTPException, ValueError) as error:
+                LOGGER.exception("Failed to create ticket for %s", interaction.user)
+                await self.send_interaction_message(interaction, f"I could not create your ticket: {error}")
+                return
+
+            welcome = make_embed(
+                "Ticket Opened",
+                (
+                    f"Welcome {interaction.user.mention}. Please explain how the team can help.\n\n"
+                    "Use the controls below to claim, export, or close this ticket."
+                ),
+                discord.Color.green(),
+            )
+            try:
+                await ticket_channel.send(
+                    content=f"{interaction.user.mention} <@&{self.settings.moderator_role_id}>",
+                    embed=welcome,
+                    view=self.ticket_controls_view,
+                    allowed_mentions=discord.AllowedMentions(users=True, roles=True),
+                )
+            except discord.HTTPException:
+                LOGGER.exception("Ticket %s was created but its welcome message failed", ticket_channel.id)
+
+            await self.send_interaction_message(
+                interaction,
+                f"Your private ticket is ready: {ticket_channel.mention}",
+            )
+
+    def ticket_action_allowed(self, member: discord.Member, owner_id: int) -> bool:
+        return member.id == owner_id or self.has_staff_access(member, "manage_channels")
+
+    async def claim_ticket_from_button(self, interaction: discord.Interaction) -> None:
+        if not isinstance(interaction.channel, discord.TextChannel) or interaction.guild is None:
+            await self.send_interaction_message(interaction, "Use this inside a ticket channel.")
+            return
+        ticket = self.parse_ticket_channel(interaction.channel)
+        if ticket is None or not isinstance(interaction.user, discord.Member):
+            await self.send_interaction_message(interaction, "This is not an active ticket channel.")
+            return
+        if not self.has_staff_access(interaction.user, "manage_channels"):
+            await self.send_interaction_message(interaction, NO_PERMISSION)
+            return
+
+        owner_id, claimed_id, opened_at = ticket
+        if claimed_id == interaction.user.id:
+            await self.send_interaction_message(interaction, "You have already claimed this ticket.")
+            return
+        if claimed_id:
+            await self.send_interaction_message(interaction, f"This ticket is already claimed by <@{claimed_id}>.")
+            return
+
+        try:
+            await interaction.channel.edit(
+                topic=self.build_ticket_topic(owner_id, interaction.user.id, opened_at),
+                reason=f"Ticket claimed by {interaction.user}",
+            )
+            await interaction.channel.send(
+                embed=make_embed(
+                    "Ticket Claimed",
+                    f"{interaction.user.mention} is now handling this ticket.",
+                    discord.Color.blurple(),
+                )
+            )
+        except discord.HTTPException:
+            LOGGER.exception("Failed to claim ticket channel %s", interaction.channel.id)
+            await self.send_interaction_message(interaction, "I could not claim this ticket.")
+            return
+        await self.send_interaction_message(interaction, "Ticket claimed.")
+
+    async def handle_ticket_participant(
+        self,
+        interaction: discord.Interaction,
+        user: discord.Member,
+        *,
+        add: bool,
+    ) -> None:
+        if not isinstance(interaction.channel, discord.TextChannel) or interaction.guild is None:
+            await self.send_interaction_message(interaction, "Use this command inside a ticket channel.")
+            return
+        ticket = self.parse_ticket_channel(interaction.channel)
+        if ticket is None or not isinstance(interaction.user, discord.Member):
+            await self.send_interaction_message(interaction, "This is not an active ticket channel.")
+            return
+        if not self.has_staff_access(interaction.user, "manage_channels"):
+            await self.send_interaction_message(interaction, NO_PERMISSION)
+            return
+        if not add and user.id == ticket[0]:
+            await self.send_interaction_message(interaction, "The ticket opener cannot be removed.")
+            return
+
+        try:
+            overwrite = (
+                discord.PermissionOverwrite(
+                    view_channel=True,
+                    send_messages=True,
+                    read_message_history=True,
+                    attach_files=True,
+                    embed_links=True,
+                )
+                if add
+                else None
+            )
+            await interaction.channel.set_permissions(
+                user,
+                overwrite=overwrite,
+                reason=f"Ticket participant {'added' if add else 'removed'} by {interaction.user}",
+            )
+        except discord.HTTPException:
+            LOGGER.exception("Failed to update participant in ticket %s", interaction.channel.id)
+            await self.send_interaction_message(interaction, "I could not update that member's ticket access.")
+            return
+
+        action = "added to" if add else "removed from"
+        await interaction.channel.send(
+            embed=make_embed(
+                "Participant Updated",
+                f"{user.mention} was {action} the ticket by {interaction.user.mention}.",
+                discord.Color.green() if add else discord.Color.orange(),
+            )
+        )
+        await self.send_interaction_message(interaction, f"{user.mention} was {action} this ticket.")
+
+    async def build_ticket_transcript(self, channel: discord.TextChannel) -> Tuple[bytes, str, int]:
+        ticket = self.parse_ticket_channel(channel)
+        if ticket is None:
+            raise ValueError("This is not an active ticket channel.")
+
+        rows: List[str] = []
+        message_count = 0
+        async for message in channel.history(limit=None, oldest_first=True):
+            message_count += 1
+            author_name = html.escape(str(message.author))
+            author_id = html.escape(str(message.author.id))
+            avatar_url = html.escape(str(message.author.display_avatar.url), quote=True)
+            content = html.escape(message.content or "")
+            content_html = f'<div class="content">{content}</div>' if content else ""
+            attachment_html = "".join(
+                f'<div class="attachment">📎 <a href="{html.escape(item.url, quote=True)}">'
+                f'{html.escape(item.filename)}</a></div>'
+                for item in message.attachments
+            )
+            embed_html = "".join(
+                '<div class="discord-embed">'
+                f'<strong>{html.escape(item.title or "Embed")}</strong>'
+                f'<div>{html.escape(item.description or "")}</div>'
+                "</div>"
+                for item in message.embeds
+            )
+            sticker_html = "".join(
+                f'<div class="attachment">Sticker: {html.escape(item.name)}</div>' for item in message.stickers
+            )
+            edited = " (edited)" if message.edited_at else ""
+            rows.append(
+                '<article class="message">'
+                f'<img class="avatar" src="{avatar_url}" alt="">'
+                '<div class="body">'
+                f'<div><span class="author">{author_name}</span> '
+                f'<span class="meta">{author_id} • {message.created_at.strftime("%Y-%m-%d %H:%M:%S UTC")}{edited}</span></div>'
+                f'{content_html}{attachment_html}{embed_html}{sticker_html}'
+                "</div></article>"
+            )
+
+        owner_id, claimed_id, opened_at = ticket
+        document = f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Transcript #{html.escape(channel.name)}</title>
+<style>
+body{{margin:0;background:#313338;color:#dbdee1;font:15px Arial,sans-serif}}main{{max-width:1000px;margin:auto;padding:32px}}
+h1{{color:#fff;margin-bottom:6px}}.summary{{color:#b5bac1;margin-bottom:28px}}.message{{display:flex;gap:14px;padding:10px 6px}}
+.message:hover{{background:#2e3035}}.avatar{{width:40px;height:40px;border-radius:50%}}.body{{min-width:0;flex:1}}
+.author{{font-weight:700;color:#f2f3f5}}.meta{{font-size:12px;color:#949ba4}}.content{{white-space:pre-wrap;overflow-wrap:anywhere;margin-top:4px}}
+a{{color:#00a8fc}}.attachment{{margin-top:6px}}.discord-embed{{border-left:4px solid #5865f2;background:#2b2d31;padding:10px;margin-top:7px;max-width:620px}}
+</style></head><body><main><h1>#{html.escape(channel.name)}</h1>
+<div class="summary">Server: {html.escape(channel.guild.name)} • Owner ID: {owner_id} • Claimed ID: {claimed_id or 'Unclaimed'}<br>
+Opened: {html.escape(opened_at)} • Exported: {utc_now().strftime('%Y-%m-%d %H:%M:%S UTC')} • Messages: {message_count}</div>
+{''.join(rows)}</main></body></html>"""
+        payload = document.encode("utf-8")
+        filename = f"transcript-{channel.name}-{channel.id}.html"
+        if len(payload) > 7_500_000:
+            archive = io.BytesIO()
+            with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as output:
+                output.writestr(filename, payload)
+            payload = archive.getvalue()
+            filename = f"transcript-{channel.name}-{channel.id}.zip"
+        return payload, filename, message_count
+
+    async def send_ticket_transcript(self, interaction: discord.Interaction) -> None:
+        if not isinstance(interaction.channel, discord.TextChannel) or interaction.guild is None:
+            await self.send_interaction_message(interaction, "Use this inside a ticket channel.")
+            return
+        ticket = self.parse_ticket_channel(interaction.channel)
+        if ticket is None or not isinstance(interaction.user, discord.Member):
+            await self.send_interaction_message(interaction, "This is not an active ticket channel.")
+            return
+        if not self.ticket_action_allowed(interaction.user, ticket[0]):
+            await self.send_interaction_message(interaction, NO_PERMISSION)
+            return
+        if not await self.defer_interaction_once(interaction, ephemeral=True, thinking=True):
+            return
+        try:
+            payload, filename, count = await self.build_ticket_transcript(interaction.channel)
+            await interaction.followup.send(
+                f"Transcript ready ({count} messages).",
+                file=discord.File(io.BytesIO(payload), filename=filename),
+                ephemeral=True,
+            )
+        except (discord.HTTPException, ValueError):
+            LOGGER.exception("Failed to export ticket transcript for channel %s", interaction.channel.id)
+            await self.send_interaction_message(interaction, "I could not export this ticket transcript.")
+
+    async def request_ticket_close(self, interaction: discord.Interaction) -> None:
+        if not isinstance(interaction.channel, discord.TextChannel) or interaction.guild is None:
+            await self.send_interaction_message(interaction, "Use this inside a ticket channel.")
+            return
+        ticket = self.parse_ticket_channel(interaction.channel)
+        if ticket is None or not isinstance(interaction.user, discord.Member):
+            await self.send_interaction_message(interaction, "This is not an active ticket channel.")
+            return
+        if not self.ticket_action_allowed(interaction.user, ticket[0]):
+            await self.send_interaction_message(interaction, NO_PERMISSION)
+            return
+        await self.send_interaction_message(
+            interaction,
+            "Close this ticket? A transcript will be saved before the channel is deleted.",
+            view=self.ticket_close_confirm_view,
+        )
+
+    async def close_ticket_from_button(self, interaction: discord.Interaction) -> None:
+        await self.close_ticket_from_command(interaction, "Closed from the ticket controls")
+
+    async def cancel_ticket_close(self, interaction: discord.Interaction) -> None:
+        try:
+            await interaction.response.edit_message(content="Ticket closure cancelled.", view=None)
+        except discord.HTTPException:
+            await self.send_interaction_message(interaction, "Ticket closure cancelled.")
+
+    async def close_ticket_from_command(self, interaction: discord.Interaction, reason: str) -> None:
+        if not isinstance(interaction.channel, discord.TextChannel) or interaction.guild is None:
+            await self.send_interaction_message(interaction, "Use this inside a ticket channel.")
+            return
+        ticket = self.parse_ticket_channel(interaction.channel)
+        if ticket is None or not isinstance(interaction.user, discord.Member):
+            await self.send_interaction_message(interaction, "This is not an active ticket channel.")
+            return
+        if not self.ticket_action_allowed(interaction.user, ticket[0]):
+            await self.send_interaction_message(interaction, NO_PERMISSION)
+            return
+        if not await self.defer_interaction_once(interaction, ephemeral=True, thinking=True):
+            return
+
+        channel = interaction.channel
+        try:
+            payload, filename, count = await self.build_ticket_transcript(channel)
+        except (discord.HTTPException, ValueError):
+            LOGGER.exception("Refusing to close ticket %s because transcript generation failed", channel.id)
+            await self.send_interaction_message(
+                interaction,
+                "The transcript could not be created, so the ticket was not closed.",
+            )
+            return
+
+        owner_id = ticket[0]
+        close_embed = make_embed(
+            "Ticket Closed",
+            (
+                f"Channel: **#{channel.name}** (`{channel.id}`)\n"
+                f"Opened by: <@{owner_id}> (`{owner_id}`)\n"
+                f"Closed by: {interaction.user.mention} (`{interaction.user.id}`)\n"
+                f"Reason: {truncate_text(reason, 500)}\n"
+                f"Messages: {count}"
+            ),
+            discord.Color.red(),
+        )
+
+        transcript_channel_id = self.settings.ticket_transcript_channel_id or self.settings.mod_log_channel_id
+        try:
+            transcript_channel = self.get_channel(transcript_channel_id) or await self.fetch_channel(transcript_channel_id)
+            if isinstance(transcript_channel, discord.TextChannel):
+                await transcript_channel.send(
+                    embed=close_embed,
+                    file=discord.File(io.BytesIO(payload), filename=filename),
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            else:
+                LOGGER.warning("Ticket transcript channel %s is not a text channel", transcript_channel_id)
+        except discord.HTTPException:
+            LOGGER.exception("Failed to send transcript for ticket %s to log channel", channel.id)
+
+        try:
+            owner = self.get_user(owner_id) or await self.fetch_user(owner_id)
+            await owner.send(
+                embed=make_embed(
+                    "Your Ticket Was Closed",
+                    f"Reason: {truncate_text(reason, 500)}\nMessages: {count}",
+                    discord.Color.red(),
+                ),
+                file=discord.File(io.BytesIO(payload), filename=filename),
+            )
+        except (discord.Forbidden, discord.NotFound):
+            LOGGER.info("Could not DM ticket transcript to user %s", owner_id)
+        except discord.HTTPException:
+            LOGGER.exception("Failed to DM ticket transcript to user %s", owner_id)
+
+        try:
+            await interaction.followup.send(
+                "Transcript saved. This ticket will close shortly.",
+                file=discord.File(io.BytesIO(payload), filename=filename),
+                ephemeral=True,
+            )
+        except discord.HTTPException:
+            LOGGER.exception("Failed to send closing transcript response for ticket %s", channel.id)
+
+        try:
+            await channel.send(embed=close_embed, allowed_mentions=discord.AllowedMentions.none())
+        except discord.HTTPException:
+            LOGGER.exception("Failed to post closing notice in ticket channel %s", channel.id)
+
+        await asyncio.sleep(3)
+        try:
+            await channel.delete(reason=f"Ticket closed by {interaction.user}: {reason[:200]}")
+        except discord.HTTPException:
+            LOGGER.exception("Failed to delete ticket channel %s", channel.id)
+            await self.send_interaction_message(interaction, "The transcript was saved, but I could not delete the ticket channel.")
 
     def get_session_by_thread(self, thread_id: int) -> Optional[ModmailSession]:
         for session in self.modmail_sessions.values():
