@@ -39,10 +39,7 @@ SERVER_INFO_BANNER_PATH = Path("assets/northeast-esports-server-hub.png")
 SERVER_INFO_BANNER_FILENAME = "northeast-esports-server-hub.png"
 SERVER_INFO_INVITE_URL = "https://discord.gg/zagTby3ugE"
 SERVER_INFO_INSTAGRAM_URL = "https://www.instagram.com/hok.ne.india?igsh=OTM3YW8zd2ZidW52"
-SERVER_INFO_COMMUNITY_URL = (
-    "https://camp.honorofkings.com/h5/app/index.html#/social-circle/home?"
-    "open_id=7636819695207311922&current_group_id=1011020"
-)
+SERVER_INFO_YOUTUBE_URL = "https://www.youtube.com/"
 SERVER_INFO_SECTION_ORDER = ("welcome", "rules", "links", "verification", "levels")
 SERVER_INFO_SECTION_LABELS = {
     "welcome": "Welcome",
@@ -50,6 +47,11 @@ SERVER_INFO_SECTION_LABELS = {
     "links": "Links",
     "verification": "Verification",
     "levels": "Levels",
+}
+SERVER_INFO_BUTTON_URL_LABELS = {
+    "invite_url": "Invite",
+    "instagram_url": "Instagram",
+    "youtube_url": "YouTube",
 }
 BRAND_FOOTER = "Northeast Esports"
 QOTD_ROLE_NAME = "❓QOTD"
@@ -362,7 +364,7 @@ class ServerInfoView(discord.ui.View):
         *,
         invite_url: str = SERVER_INFO_INVITE_URL,
         instagram_url: str = SERVER_INFO_INSTAGRAM_URL,
-        community_url: str = SERVER_INFO_COMMUNITY_URL,
+        youtube_url: str = SERVER_INFO_YOUTUBE_URL,
     ) -> None:
         super().__init__(timeout=None)
         self.add_item(
@@ -391,10 +393,10 @@ class ServerInfoView(discord.ui.View):
         )
         self.add_item(
             discord.ui.Button(
-                label="Community",
-                emoji="\U0001f3ae",
+                label="YouTube",
+                emoji="\u25b6\ufe0f",
                 style=discord.ButtonStyle.link,
-                url=community_url,
+                url=youtube_url,
             )
         )
 
@@ -696,7 +698,9 @@ class ServerInfoEditModal(discord.ui.Modal):
         super().__init__(title=f"Edit {section_label} Embed")
         self.bot = bot
         self.message = message
+        self.section_key = section_key
         self.section_index = section_index
+        self.button_urls: Optional[discord.ui.TextInput] = None
 
         color_value = embed.color.value if embed.color is not None else discord.Color.blurple().value
         self.embed_title = discord.ui.TextInput(
@@ -734,6 +738,16 @@ class ServerInfoEditModal(discord.ui.Modal):
         self.add_item(self.embed_description)
         self.add_item(self.embed_color)
         self.add_item(self.embed_fields)
+        if section_key == "links":
+            self.button_urls = discord.ui.TextInput(
+                label="Button URLs",
+                style=discord.TextStyle.paragraph,
+                placeholder="Invite | https://...\nInstagram | https://...\nYouTube | https://...",
+                required=False,
+                default=bot.serialize_server_info_button_urls(message, embed),
+                max_length=1000,
+            )
+            self.add_item(self.button_urls)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         await self.bot.apply_server_info_embed_edit(
@@ -744,6 +758,7 @@ class ServerInfoEditModal(discord.ui.Modal):
             self.embed_description.value,
             self.embed_color.value,
             self.embed_fields.value,
+            self.button_urls.value if self.button_urls is not None else None,
         )
 
     async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
@@ -1985,7 +2000,7 @@ class RhinoBot(commands.Bot):
         )
         links_embed.add_field(name="Permanent Discord Server Link", value=SERVER_INFO_INVITE_URL, inline=False)
         links_embed.add_field(name="Instagram", value=SERVER_INFO_INSTAGRAM_URL, inline=False)
-        links_embed.add_field(name="Honor of Kings Community Group", value=SERVER_INFO_COMMUNITY_URL, inline=False)
+        links_embed.add_field(name="YouTube", value=SERVER_INFO_YOUTUBE_URL, inline=False)
         links_embed.add_field(
             name="Broken Link?",
             value="Contact an admin or moderator so the link can be refreshed.",
@@ -2030,27 +2045,112 @@ class RhinoBot(commands.Bot):
             return "invite_url"
         if "instagram" in normalized or "insta" in normalized:
             return "instagram_url"
-        if "community" in normalized or "honor" in normalized:
-            return "community_url"
+        if "youtube" in normalized or "yt" in normalized:
+            return "youtube_url"
         return None
 
-    def create_server_info_view_for_embeds(self, embeds: List[discord.Embed]) -> ServerInfoView:
-        urls = {
+    def get_server_info_button_url_defaults(self) -> Dict[str, str]:
+        return {
             "invite_url": SERVER_INFO_INVITE_URL,
             "instagram_url": SERVER_INFO_INSTAGRAM_URL,
-            "community_url": SERVER_INFO_COMMUNITY_URL,
+            "youtube_url": SERVER_INFO_YOUTUBE_URL,
         }
+
+    def extract_server_info_button_urls_from_links_embed(self, links_embed: discord.Embed) -> Dict[str, str]:
+        urls: Dict[str, str] = {}
+        for field in links_embed.fields:
+            url_key = self.classify_server_info_link_field(field.name)
+            url = self.extract_first_http_url(str(field.value))
+            if url_key is not None and url is not None:
+                urls[url_key] = url
+        return urls
+
+    def extract_server_info_button_urls_from_components(self, message: discord.Message) -> Dict[str, str]:
+        urls: Dict[str, str] = {}
+        for row in message.components:
+            for child in getattr(row, "children", []):
+                label = str(getattr(child, "label", ""))
+                url = getattr(child, "url", None)
+                url_key = self.classify_server_info_link_field(label)
+                if url_key is not None and isinstance(url, str) and is_valid_image_url(url):
+                    urls[url_key] = url
+        return urls
+
+    def serialize_server_info_button_urls(self, message: discord.Message, links_embed: discord.Embed) -> str:
+        urls = self.get_server_info_button_url_defaults()
+        urls.update(self.extract_server_info_button_urls_from_links_embed(links_embed))
+        urls.update(self.extract_server_info_button_urls_from_components(message))
+        return "\n".join(
+            f"{label} | {urls[url_key]}"
+            for url_key, label in SERVER_INFO_BUTTON_URL_LABELS.items()
+        )
+
+    def parse_server_info_button_urls(self, value: Optional[str]) -> Tuple[Optional[Dict[str, str]], Optional[str]]:
+        if value is None:
+            return {}, None
+
+        cleaned = value.strip()
+        if not cleaned:
+            return {}, None
+
+        urls: Dict[str, str] = {}
+        for line_number, raw_line in enumerate(cleaned.splitlines(), start=1):
+            line = raw_line.strip()
+            if not line:
+                continue
+            if "|" not in line:
+                return None, f"Button URL line {line_number} must use `Button | https://...`."
+
+            label, url = (part.strip() for part in line.split("|", 1))
+            url_key = self.classify_server_info_link_field(label)
+            if url_key is None:
+                return None, f"Button URL line {line_number} must be Invite, Instagram, or YouTube."
+            if not is_valid_image_url(url):
+                return None, f"Button URL line {line_number} must use a valid `http://` or `https://` URL."
+            urls[url_key] = url
+
+        return urls, None
+
+    def sync_server_info_button_urls_to_links_embed(
+        self,
+        links_embed: discord.Embed,
+        button_urls: Dict[str, str],
+    ) -> Optional[discord.Embed]:
+        if not button_urls:
+            return links_embed
+
+        existing_fields = [
+            (field.name, str(field.value), field.inline)
+            for field in links_embed.fields
+        ]
+        matched_keys: set[str] = set()
+
+        for index, (name, value, inline) in enumerate(existing_fields):
+            url_key = self.classify_server_info_link_field(name)
+            if url_key in button_urls:
+                existing_fields[index] = (name, button_urls[url_key], inline)
+                matched_keys.add(url_key)
+
+        for url_key, label in SERVER_INFO_BUTTON_URL_LABELS.items():
+            if url_key in button_urls and url_key not in matched_keys:
+                if len(existing_fields) >= 25:
+                    return None
+                existing_fields.append((label, button_urls[url_key], False))
+
+        links_embed.clear_fields()
+        for name, value, inline in existing_fields:
+            links_embed.add_field(name=name, value=value, inline=inline)
+        return links_embed
+
+    def create_server_info_view_for_embeds(self, embeds: List[discord.Embed]) -> ServerInfoView:
+        urls = self.get_server_info_button_url_defaults()
         try:
             links_index = SERVER_INFO_SECTION_ORDER.index("links")
         except ValueError:
             links_index = -1
 
         if links_index >= 0 and links_index < len(embeds):
-            for field in embeds[links_index].fields:
-                url_key = self.classify_server_info_link_field(field.name)
-                url = self.extract_first_http_url(str(field.value))
-                if url_key is not None and url is not None:
-                    urls[url_key] = url
+            urls.update(self.extract_server_info_button_urls_from_links_embed(embeds[links_index]))
 
         return ServerInfoView(**urls)
 
@@ -2158,6 +2258,7 @@ class RhinoBot(commands.Bot):
         description: str,
         color_text: str,
         fields_text: str,
+        button_urls_text: Optional[str] = None,
     ) -> None:
         if interaction.guild is None:
             await interaction.response.send_message("This editor can only be used inside a server.", ephemeral=True)
@@ -2186,6 +2287,24 @@ class RhinoBot(commands.Bot):
         if error is not None or edited_embed is None:
             await self.send_interaction_message(interaction, error or "I could not build that embed.", ephemeral=True)
             return
+
+        if button_urls_text is not None:
+            button_urls, button_url_error = self.parse_server_info_button_urls(button_urls_text)
+            if button_url_error is not None or button_urls is None:
+                await self.send_interaction_message(
+                    interaction,
+                    button_url_error or "I could not parse those button URLs.",
+                    ephemeral=True,
+                )
+                return
+            edited_embed = self.sync_server_info_button_urls_to_links_embed(edited_embed, button_urls)
+            if edited_embed is None:
+                await self.send_interaction_message(
+                    interaction,
+                    "I could not add those button URLs because the embed already has 25 fields.",
+                    ephemeral=True,
+                )
+                return
 
         embeds[section_index] = edited_embed
         try:
