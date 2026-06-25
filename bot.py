@@ -43,6 +43,14 @@ SERVER_INFO_COMMUNITY_URL = (
     "https://camp.honorofkings.com/h5/app/index.html#/social-circle/home?"
     "open_id=7636819695207311922&current_group_id=1011020"
 )
+SERVER_INFO_SECTION_ORDER = ("welcome", "rules", "links", "verification", "levels")
+SERVER_INFO_SECTION_LABELS = {
+    "welcome": "Welcome",
+    "rules": "Rules",
+    "links": "Links",
+    "verification": "Verification",
+    "levels": "Levels",
+}
 BRAND_FOOTER = "Northeast Esports"
 QOTD_ROLE_NAME = "❓QOTD"
 AUTOREACT_DATA_PATH = Path("autoreact_data.json")
@@ -669,6 +677,77 @@ class EmbedBuilderModal(discord.ui.Modal, title="Embed Builder"):
             await interaction.response.send_message("The embed builder failed. Please try again.", ephemeral=True)
 
 
+class ServerInfoEditModal(discord.ui.Modal):
+    def __init__(
+        self,
+        bot: "RhinoBot",
+        message: discord.Message,
+        section_key: str,
+        section_index: int,
+        embed: discord.Embed,
+    ) -> None:
+        section_label = SERVER_INFO_SECTION_LABELS.get(section_key, "Section")
+        super().__init__(title=f"Edit {section_label} Embed")
+        self.bot = bot
+        self.message = message
+        self.section_index = section_index
+
+        color_value = embed.color.value if embed.color is not None else discord.Color.blurple().value
+        self.embed_title = discord.ui.TextInput(
+            label="Embed Title",
+            placeholder="Section title",
+            required=False,
+            default=embed.title or "",
+            max_length=256,
+        )
+        self.embed_description = discord.ui.TextInput(
+            label="Embed Description",
+            style=discord.TextStyle.paragraph,
+            placeholder="Main section text. Supports {#channel}, {&role}, {@member}.",
+            required=False,
+            default=embed.description or "",
+            max_length=4000,
+        )
+        self.embed_color = discord.ui.TextInput(
+            label="Embed Color",
+            placeholder="Hex color like #2F80ED",
+            required=False,
+            default=f"#{color_value:06X}",
+            max_length=7,
+        )
+        self.embed_fields = discord.ui.TextInput(
+            label="Fields",
+            style=discord.TextStyle.paragraph,
+            placeholder="Optional: Field name | Field value. One field per line.",
+            required=False,
+            default=bot.serialize_embed_fields(embed),
+            max_length=4000,
+        )
+
+        self.add_item(self.embed_title)
+        self.add_item(self.embed_description)
+        self.add_item(self.embed_color)
+        self.add_item(self.embed_fields)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await self.bot.apply_server_info_embed_edit(
+            interaction,
+            self.message,
+            self.section_index,
+            self.embed_title.value,
+            self.embed_description.value,
+            self.embed_color.value,
+            self.embed_fields.value,
+        )
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
+        LOGGER.exception("Server-info editor modal failed for %s", interaction.user, exc_info=error)
+        if interaction.response.is_done():
+            await interaction.followup.send("The server-info editor failed. Please try again.", ephemeral=True)
+        else:
+            await interaction.response.send_message("The server-info editor failed. Please try again.", ephemeral=True)
+
+
 class RhinoBot(commands.Bot):
     def __init__(self, settings: Settings) -> None:
         intents = discord.Intents.default()
@@ -1241,7 +1320,8 @@ class RhinoBot(commands.Bot):
                 name="Embeds & Info",
                 value=(
                     "`/embed` open a modal to build and send an embed message.\n"
-                    "`/serverinfo post` post the modern server-info hub."
+                    "`/serverinfo post` post the modern server-info hub.\n"
+                    "`/serverinfo edit` edit one section of a posted server-info hub."
                 ),
                 inline=False,
             )
@@ -1438,6 +1518,29 @@ class RhinoBot(commands.Bot):
             channel: Optional[discord.TextChannel] = None,
         ) -> None:
             await self.handle_server_info_post(interaction, channel)
+
+        @serverinfo.command(name="edit", description="Edit a section of a posted server-info hub")
+        @app_commands.describe(
+            message_id="Message ID or link for the server-info embed message",
+            section="Which server-info section to edit",
+            channel="Channel containing the server-info embed message",
+        )
+        @app_commands.choices(
+            section=[
+                app_commands.Choice(name="Welcome", value="welcome"),
+                app_commands.Choice(name="Rules", value="rules"),
+                app_commands.Choice(name="Links", value="links"),
+                app_commands.Choice(name="Verification", value="verification"),
+                app_commands.Choice(name="Levels", value="levels"),
+            ]
+        )
+        async def serverinfo_edit(
+            interaction: discord.Interaction,
+            message_id: str,
+            section: str,
+            channel: Optional[discord.TextChannel] = None,
+        ) -> None:
+            await self.handle_server_info_edit(interaction, message_id, section, channel)
 
         tree.add_command(serverinfo)
 
@@ -1906,6 +2009,164 @@ class RhinoBot(commands.Bot):
         )
 
         return [welcome_embed, rules_embed, links_embed, verification_embed, levels_embed]
+
+    def serialize_embed_fields(self, embed: discord.Embed, *, limit: int = 4000) -> str:
+        lines = []
+        total_length = 0
+        for field in embed.fields:
+            value = str(field.value).replace("\n", "\\n")
+            line = f"{field.name} | {value}"
+            line_length = len(line) + (1 if lines else 0)
+            if total_length + line_length > limit:
+                break
+            lines.append(line)
+            total_length += line_length
+        return "\n".join(lines)
+
+    def parse_embed_fields(self, value: str) -> Tuple[Optional[List[Tuple[str, str, bool]]], Optional[str]]:
+        cleaned = value.strip()
+        if not cleaned:
+            return [], None
+
+        fields: List[Tuple[str, str, bool]] = []
+        for line_number, raw_line in enumerate(cleaned.splitlines(), start=1):
+            line = raw_line.strip()
+            if not line:
+                continue
+            if "|" not in line:
+                return None, f"Field line {line_number} must use `Field name | Field value`."
+
+            name, field_value = (part.strip() for part in line.split("|", 1))
+            if not name or not field_value:
+                return None, f"Field line {line_number} needs both a name and a value."
+            if len(name) > 256:
+                return None, f"Field line {line_number} has a name longer than 256 characters."
+
+            field_value = field_value.replace("\\n", "\n")
+            if len(field_value) > 1024:
+                return None, f"Field line {line_number} has a value longer than 1024 characters."
+
+            fields.append((name, field_value, False))
+            if len(fields) > 25:
+                return None, "Discord embeds can only have up to 25 fields."
+
+        return fields, None
+
+    def build_edited_server_info_embed(
+        self,
+        guild: discord.Guild,
+        current_embed: discord.Embed,
+        title: str,
+        description: str,
+        color_text: str,
+        fields_text: str,
+    ) -> Tuple[Optional[discord.Embed], Optional[str]]:
+        color = parse_embed_color(color_text)
+        if color is None:
+            return None, "Please use a valid hex color like `#2F80ED`."
+
+        fields, field_error = self.parse_embed_fields(fields_text)
+        if field_error is not None:
+            return None, field_error
+        if fields is None:
+            return None, "I could not parse those embed fields."
+
+        normalized_title = self.resolve_embed_references(guild, normalize_optional_text(title))
+        normalized_description = self.resolve_embed_references(guild, normalize_optional_text(description))
+        resolved_fields = [
+            (
+                self.resolve_embed_references(guild, field_name) or field_name,
+                self.resolve_embed_references(guild, field_value) or field_value,
+                inline,
+            )
+            for field_name, field_value, inline in fields
+        ]
+
+        if normalized_title is None and normalized_description is None and not resolved_fields:
+            return None, "Keep at least a title, description, or field in the embed."
+
+        embed_data = current_embed.to_dict()
+        if normalized_title is None:
+            embed_data.pop("title", None)
+        else:
+            embed_data["title"] = normalized_title
+        if normalized_description is None:
+            embed_data.pop("description", None)
+        else:
+            embed_data["description"] = normalized_description
+        embed_data["color"] = color.value
+        embed_data["fields"] = [
+            {"name": field_name, "value": field_value, "inline": inline}
+            for field_name, field_value, inline in resolved_fields
+        ]
+
+        edited_embed = discord.Embed.from_dict(embed_data)
+        if edited_embed.footer.text is None:
+            edited_embed.set_footer(text=BRAND_FOOTER)
+        return edited_embed, None
+
+    async def apply_server_info_embed_edit(
+        self,
+        interaction: discord.Interaction,
+        message: discord.Message,
+        section_index: int,
+        title: str,
+        description: str,
+        color_text: str,
+        fields_text: str,
+    ) -> None:
+        if interaction.guild is None:
+            await interaction.response.send_message("This editor can only be used inside a server.", ephemeral=True)
+            return
+
+        if not await self.defer_interaction_once(interaction, ephemeral=True):
+            return
+
+        embeds = list(message.embeds)
+        if section_index >= len(embeds):
+            await self.send_interaction_message(
+                interaction,
+                "That message no longer has the section you tried to edit.",
+                ephemeral=True,
+            )
+            return
+
+        edited_embed, error = self.build_edited_server_info_embed(
+            interaction.guild,
+            embeds[section_index],
+            title,
+            description,
+            color_text,
+            fields_text,
+        )
+        if error is not None or edited_embed is None:
+            await self.send_interaction_message(interaction, error or "I could not build that embed.", ephemeral=True)
+            return
+
+        embeds[section_index] = edited_embed
+        try:
+            await message.edit(
+                embeds=embeds,
+                view=ServerInfoView(),
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except discord.Forbidden:
+            await self.send_interaction_message(
+                interaction,
+                "I do not have permission to edit that server-info message.",
+                ephemeral=True,
+            )
+            return
+        except discord.HTTPException:
+            LOGGER.exception("Failed to edit server-info message %s", message.id)
+            await self.send_interaction_message(
+                interaction,
+                "I could not edit that server-info message right now. Please try again.",
+                ephemeral=True,
+            )
+            return
+
+        await self.send_interaction_message(interaction, "Server-info embed updated.", ephemeral=True)
 
     def find_member_reference(self, guild: discord.Guild, member_text: str) -> Optional[discord.Member]:
         cleaned = member_text.strip().lstrip("@")
@@ -5830,6 +6091,96 @@ class RhinoBot(commands.Bot):
             interaction,
             f"Referee application panel disabled in {target_channel.mention}.",
             ephemeral=True,
+        )
+
+    async def handle_server_info_edit(
+        self,
+        interaction: discord.Interaction,
+        message_id: str,
+        section: str,
+        channel: Optional[discord.TextChannel],
+    ) -> None:
+        if not await self.ensure_staff(interaction, "manage_guild"):
+            return
+        if interaction.guild is None:
+            await self.send_interaction_message(interaction, "This command can only be used inside a server.", ephemeral=True)
+            return
+
+        target_channel = channel
+        if target_channel is None:
+            if isinstance(interaction.channel, discord.TextChannel):
+                target_channel = interaction.channel
+            else:
+                await self.send_interaction_message(
+                    interaction,
+                    "Please choose the channel containing the server-info message.",
+                    ephemeral=True,
+                )
+                return
+
+        section_key = section.lower()
+        if section_key not in SERVER_INFO_SECTION_ORDER:
+            await self.send_interaction_message(interaction, "Choose a valid server-info section.", ephemeral=True)
+            return
+        section_index = SERVER_INFO_SECTION_ORDER.index(section_key)
+
+        parsed_message_id = self.parse_reaction_role_message_id(message_id)
+        if parsed_message_id is None:
+            await self.send_interaction_message(
+                interaction,
+                "Please provide a valid Discord message ID or message link.",
+                ephemeral=True,
+            )
+            return
+
+        try:
+            message = await target_channel.fetch_message(parsed_message_id)
+        except discord.NotFound:
+            await self.send_interaction_message(
+                interaction,
+                f"I could not find message `{parsed_message_id}` in {target_channel.mention}.",
+                ephemeral=True,
+            )
+            return
+        except discord.Forbidden:
+            await self.send_interaction_message(
+                interaction,
+                f"I do not have permission to read message history in {target_channel.mention}.",
+                ephemeral=True,
+            )
+            return
+        except discord.HTTPException:
+            LOGGER.exception("Failed to fetch server-info message %s in channel %s", parsed_message_id, target_channel.id)
+            await self.send_interaction_message(
+                interaction,
+                "I could not fetch that server-info message right now. Please try again.",
+                ephemeral=True,
+            )
+            return
+
+        if self.user is not None and message.author.id != self.user.id:
+            await self.send_interaction_message(
+                interaction,
+                "I can only edit server-info messages that were posted by this bot.",
+                ephemeral=True,
+            )
+            return
+        if section_index >= len(message.embeds):
+            await self.send_interaction_message(
+                interaction,
+                "That message does not look like the embed message from `/serverinfo post`.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_modal(
+            ServerInfoEditModal(
+                self,
+                message,
+                section_key,
+                section_index,
+                message.embeds[section_index],
+            )
         )
 
     async def handle_server_info_post(
