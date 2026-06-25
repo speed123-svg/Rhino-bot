@@ -2388,18 +2388,18 @@ class RhinoBot(commands.Bot):
             timestamp=utc_now(),
         )
         embed.description = (
-            "✨ 👑 **Welcome to Northeast Esports** 👑 ✨\n\n"
-            f"Hey {member.mention}, welcome to the community! ⚔️\n"
+            "**Welcome to Northeast Esports**\n\n"
+            f"Hey {member.mention}, Welcome to the community!\n"
             "Get ready to battle, squad up, and connect with the Northeast Esports community.\n\n"
             f"<a:arrow_arrow:1505550701843976412> Verify yourself in {verify_channel}\n"
             f"<a:arrow_arrow:1505550701843976412> Read {server_info_channel} for rules & updates\n"
             f"<a:arrow_arrow:1505550701843976412> Introduce yourself in {intro_channel}\n"
             f"<a:arrow_arrow:1505550701843976412> Chat with everyone in {general_chat_channel}\n"
             "<a:arrow_arrow:1505550701843976412> Find teammates, squad up & enjoy the server!\n\n"
-            "🔥 **Play • Compete • Conquer** 🔥"
+            "**Play \u2022 Compete \u2022 Conquer**"
         )
         embed.set_footer(text=BRAND_FOOTER)
-        set_default_thumbnail(embed)
+        embed.set_thumbnail(url=member.display_avatar.url)
         return embed
 
     async def send_welcome_message(self, member: discord.Member) -> None:
