@@ -35,6 +35,14 @@ MODMAIL_COOLDOWN_SECONDS = 60
 MODMAIL_INACTIVITY_HOURS = 72
 DM_INTRO_COOLDOWN_SECONDS = 15
 DEFAULT_THUMBNAIL_URL = "https://raw.githubusercontent.com/speed123-svg/Rhino-bot/main/assets/lol_bhai_fad_diya.png"
+SERVER_INFO_BANNER_PATH = Path("assets/northeast-esports-server-hub.png")
+SERVER_INFO_BANNER_FILENAME = "northeast-esports-server-hub.png"
+SERVER_INFO_INVITE_URL = "https://discord.gg/zagTby3ugE"
+SERVER_INFO_INSTAGRAM_URL = "https://www.instagram.com/hok.ne.india?igsh=OTM3YW8zd2ZidW52"
+SERVER_INFO_COMMUNITY_URL = (
+    "https://camp.honorofkings.com/h5/app/index.html#/social-circle/home?"
+    "open_id=7636819695207311922&current_group_id=1011020"
+)
 BRAND_FOOTER = "Northeast Esports"
 QOTD_ROLE_NAME = "❓QOTD"
 AUTOREACT_DATA_PATH = Path("autoreact_data.json")
@@ -336,6 +344,43 @@ class VerificationView(discord.ui.View):
                 label="Northeast Esports Verification",
                 style=discord.ButtonStyle.success,
                 custom_id="verification:start",
+            )
+        )
+
+
+class ServerInfoView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+        self.add_item(
+            discord.ui.Button(
+                label="Get Verified",
+                emoji="\u2705",
+                style=discord.ButtonStyle.success,
+                custom_id="verification:start",
+            )
+        )
+        self.add_item(
+            discord.ui.Button(
+                label="Invite",
+                emoji="\U0001f517",
+                style=discord.ButtonStyle.link,
+                url=SERVER_INFO_INVITE_URL,
+            )
+        )
+        self.add_item(
+            discord.ui.Button(
+                label="Instagram",
+                emoji="\U0001f4f8",
+                style=discord.ButtonStyle.link,
+                url=SERVER_INFO_INSTAGRAM_URL,
+            )
+        )
+        self.add_item(
+            discord.ui.Button(
+                label="Community",
+                emoji="\U0001f3ae",
+                style=discord.ButtonStyle.link,
+                url=SERVER_INFO_COMMUNITY_URL,
             )
         )
 
@@ -1193,8 +1238,11 @@ class RhinoBot(commands.Bot):
                 inline=False,
             )
             embed.add_field(
-                name="Embeds",
-                value="`/embed` open a modal to build and send an embed message.",
+                name="Embeds & Info",
+                value=(
+                    "`/embed` open a modal to build and send an embed message.\n"
+                    "`/serverinfo post` post the modern server-info hub."
+                ),
                 inline=False,
             )
             embed.add_field(
@@ -1377,6 +1425,21 @@ class RhinoBot(commands.Bot):
             channel: Optional[discord.TextChannel] = None,
         ) -> None:
             await self.handle_verification_panel(interaction, channel)
+
+        serverinfo = app_commands.Group(
+            name="serverinfo",
+            description="Post modern server information panels",
+        )
+
+        @serverinfo.command(name="post", description="Post the server-info hub")
+        @app_commands.describe(channel="Channel where the server-info hub should be posted")
+        async def serverinfo_post(
+            interaction: discord.Interaction,
+            channel: Optional[discord.TextChannel] = None,
+        ) -> None:
+            await self.handle_server_info_post(interaction, channel)
+
+        tree.add_command(serverinfo)
 
         @tree.command(name="embed", description="Open an embed builder and send it to a channel")
         @app_commands.describe(channel="Channel where the embed should be posted")
@@ -1735,6 +1798,114 @@ class RhinoBot(commands.Bot):
             if role.name.lower() == normalized_target:
                 return role
         return None
+
+    def create_server_info_banner_file(self) -> Optional[discord.File]:
+        if not SERVER_INFO_BANNER_PATH.is_file():
+            return None
+        return discord.File(SERVER_INFO_BANNER_PATH, filename=SERVER_INFO_BANNER_FILENAME)
+
+    def create_server_info_embed(self, title: str, description: str, color: int) -> discord.Embed:
+        embed = discord.Embed(
+            title=title,
+            description=description,
+            color=discord.Color(color),
+            timestamp=utc_now(),
+        )
+        embed.set_footer(text=BRAND_FOOTER)
+        return embed
+
+    def create_server_info_level_lines(self, guild: discord.Guild) -> str:
+        level_roles = (
+            ("Level I", 1000),
+            ("Level II", 10000),
+            ("Level III", 30000),
+            ("Level IV", 50000),
+            ("Level V", 75000),
+            ("Level VI", 100000),
+            ("Level VII", 150000),
+            ("Level VIII", 175000),
+            ("Level IX", 200000),
+            ("Level X", 300000),
+        )
+        lines = []
+        for index, (role_name, score) in enumerate(level_roles, start=1):
+            role = self.find_role_by_name(guild, role_name)
+            role_text = role.mention if role is not None else f"@{role_name}"
+            lines.append(f"`{index:02}` {role_text} - **{score:,}** score")
+        return "\n".join(lines)
+
+    def create_server_info_embeds(self, guild: discord.Guild) -> List[discord.Embed]:
+        verify_channel = self.format_channel_reference(guild, "verify")
+        intro_channel = self.format_channel_reference(guild, "intro")
+        general_chat_channel = self.format_channel_reference(guild, "general-chat")
+        announcements_channel = self.format_channel_reference(guild, "announcements")
+        roles_channel = self.format_channel_reference(guild, "roles")
+
+        welcome_embed = self.create_server_info_embed(
+            "Honor of Kings Northeast India",
+            (
+                f"Welcome to **{self.settings.server_name}**, a home for Honor of Kings players "
+                "across Northeast India.\n\n"
+                "Squad up, discuss strategy, share clips, find teammates, and stay close to the "
+                "community events happening around the server.\n\n"
+                f"Start with {intro_channel}, chat in {general_chat_channel}, and keep an eye on "
+                f"{announcements_channel} for important updates.\n\n"
+                "**Play smart. Respect people. Bring good energy.**"
+            ),
+            0x2F80ED,
+        )
+
+        rules_embed = self.create_server_info_embed(
+            "\U0001f4dc Rules and Standards",
+            (
+                "Keep the community useful, safe, and enjoyable for everyone.\n\n"
+                "`01` Respect every member. No harassment, hate speech, or personal attacks.\n"
+                "`02` Keep channels on-topic and avoid spam, flooding, or repeated pings.\n"
+                "`03` No scams, unsafe links, impersonation, or suspicious downloads.\n"
+                "`04` Keep competitive talk healthy. Debate plays, not people.\n"
+                "`05` Follow Discord Community Guidelines and staff instructions.\n\n"
+                "Rule-breaking can lead to message removal, timeout, kick, or ban depending on severity."
+            ),
+            0xF2C94C,
+        )
+
+        links_embed = self.create_server_info_embed(
+            "\U0001f517 Official Links",
+            "Use the buttons below for quick access, or copy the links here if you are on mobile.",
+            0x56CCF2,
+        )
+        links_embed.add_field(name="Permanent Discord Server Link", value=SERVER_INFO_INVITE_URL, inline=False)
+        links_embed.add_field(name="Instagram", value=SERVER_INFO_INSTAGRAM_URL, inline=False)
+        links_embed.add_field(name="Honor of Kings Community Group", value=SERVER_INFO_COMMUNITY_URL, inline=False)
+        links_embed.add_field(
+            name="Broken Link?",
+            value="Contact an admin or moderator so the link can be refreshed.",
+            inline=False,
+        )
+
+        verification_embed = self.create_server_info_embed(
+            "\u2705 Verification System",
+            (
+                "Verification keeps the server cleaner and unlocks full member access.\n\n"
+                f"`01` Go to {verify_channel}\n"
+                "`02` Tap **Get Verified** below\n"
+                "`03` Start exploring the community once your role is added\n\n"
+                f"Already verified? Pick up optional community roles in {roles_channel}."
+            ),
+            0x27AE60,
+        )
+
+        levels_embed = self.create_server_info_embed(
+            "\U0001f3af Leveling System",
+            (
+                "Stay active, help other players, and climb the server score ladder.\n\n"
+                f"{self.create_server_info_level_lines(guild)}\n\n"
+                "Healthy conversation counts. Spam does not help the community."
+            ),
+            0x9B51E0,
+        )
+
+        return [welcome_embed, rules_embed, links_embed, verification_embed, levels_embed]
 
     def find_member_reference(self, guild: discord.Guild, member_text: str) -> Optional[discord.Member]:
         cleaned = member_text.strip().lstrip("@")
@@ -5658,6 +5829,60 @@ class RhinoBot(commands.Bot):
         await self.send_interaction_message(
             interaction,
             f"Referee application panel disabled in {target_channel.mention}.",
+            ephemeral=True,
+        )
+
+    async def handle_server_info_post(
+        self,
+        interaction: discord.Interaction,
+        channel: Optional[discord.TextChannel],
+    ) -> None:
+        if not await self.ensure_staff(interaction, "manage_guild"):
+            return
+        if interaction.guild is None:
+            await self.send_interaction_message(interaction, "This command can only be used inside a server.", ephemeral=True)
+            return
+
+        target_channel = channel
+        if target_channel is None:
+            if isinstance(interaction.channel, discord.TextChannel):
+                target_channel = interaction.channel
+            else:
+                await self.send_interaction_message(
+                    interaction,
+                    "Please choose a text channel for the server-info hub.",
+                    ephemeral=True,
+                )
+                return
+
+        if not await self.defer_interaction_once(interaction, ephemeral=True):
+            return
+
+        try:
+            banner_file = self.create_server_info_banner_file()
+            if banner_file is not None:
+                await target_channel.send(
+                    file=banner_file,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+
+            await target_channel.send(
+                embeds=self.create_server_info_embeds(interaction.guild),
+                view=ServerInfoView(),
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except discord.HTTPException:
+            LOGGER.exception("Failed to post server-info hub in channel %s", target_channel.id)
+            await self.send_interaction_message(
+                interaction,
+                "I could not post the server-info hub right now. Please check my permissions and try again.",
+                ephemeral=True,
+            )
+            return
+
+        await self.send_interaction_message(
+            interaction,
+            f"Server-info hub posted in {target_channel.mention}.",
             ephemeral=True,
         )
 

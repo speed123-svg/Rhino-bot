@@ -4,10 +4,11 @@ Python Discord bot for moderation, verification, modmail, private support ticket
 
 ## Features
 
-- Slash commands: `help`, `warn`, `mute`, `unmute`, `kick`, `ban`, `unban`, `addrole`, `removerole`, `role add`, `role remove`, `clear`, `modlogs`, `afk`, `prefix ...`, `verificationpanel`, `staffapplypanel` (`post` and `disable`), `ticket ...`, `qotd`, `embed`, `autoreact ...`, `reactionrole ...`, `nolink ...`, and `antiraid ...`
+- Slash commands: `help`, `warn`, `mute`, `unmute`, `kick`, `ban`, `unban`, `addrole`, `removerole`, `role add`, `role remove`, `clear`, `modlogs`, `afk`, `prefix ...`, `verificationpanel`, `serverinfo post`, `staffapplypanel` (`post` and `disable`), `ticket ...`, `qotd`, `embed`, `autoreact ...`, `reactionrole ...`, `nolink ...`, and `antiraid ...`
 - Prefix commands: `help`, `afk`, and `prefix` with per-server `set`, `show`, and `reset`
 - DM-based modmail with an `Open Modmail` button
 - Persistent Northeast Esports verification panel that assigns the `Verified` role
+- Modern server-info hub preset with a banner, rules, links, verification CTA, and level-role overview
 - Forum-thread modmail relay between moderators and users
 - Persistent ticket panel with private per-member channels, staff claiming, participant management, and duplicate-ticket prevention
 - HTML ticket transcripts available on demand and automatically sent to the log channel and ticket opener when a ticket closes
