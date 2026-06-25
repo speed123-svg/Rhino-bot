@@ -357,7 +357,13 @@ class VerificationView(discord.ui.View):
 
 
 class ServerInfoView(discord.ui.View):
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        invite_url: str = SERVER_INFO_INVITE_URL,
+        instagram_url: str = SERVER_INFO_INSTAGRAM_URL,
+        community_url: str = SERVER_INFO_COMMUNITY_URL,
+    ) -> None:
         super().__init__(timeout=None)
         self.add_item(
             discord.ui.Button(
@@ -372,7 +378,7 @@ class ServerInfoView(discord.ui.View):
                 label="Invite",
                 emoji="\U0001f517",
                 style=discord.ButtonStyle.link,
-                url=SERVER_INFO_INVITE_URL,
+                url=invite_url,
             )
         )
         self.add_item(
@@ -380,7 +386,7 @@ class ServerInfoView(discord.ui.View):
                 label="Instagram",
                 emoji="\U0001f4f8",
                 style=discord.ButtonStyle.link,
-                url=SERVER_INFO_INSTAGRAM_URL,
+                url=instagram_url,
             )
         )
         self.add_item(
@@ -388,7 +394,7 @@ class ServerInfoView(discord.ui.View):
                 label="Community",
                 emoji="\U0001f3ae",
                 style=discord.ButtonStyle.link,
-                url=SERVER_INFO_COMMUNITY_URL,
+                url=community_url,
             )
         )
 
@@ -2010,6 +2016,44 @@ class RhinoBot(commands.Bot):
 
         return [welcome_embed, rules_embed, links_embed, verification_embed, levels_embed]
 
+    @staticmethod
+    def extract_first_http_url(value: str) -> Optional[str]:
+        match = re.search(r"https?://[^\s<>()]+", value)
+        if match is None:
+            return None
+        return match.group(0).rstrip(".,;")
+
+    @staticmethod
+    def classify_server_info_link_field(name: str) -> Optional[str]:
+        normalized = name.casefold()
+        if "invite" in normalized or "discord" in normalized:
+            return "invite_url"
+        if "instagram" in normalized or "insta" in normalized:
+            return "instagram_url"
+        if "community" in normalized or "honor" in normalized:
+            return "community_url"
+        return None
+
+    def create_server_info_view_for_embeds(self, embeds: List[discord.Embed]) -> ServerInfoView:
+        urls = {
+            "invite_url": SERVER_INFO_INVITE_URL,
+            "instagram_url": SERVER_INFO_INSTAGRAM_URL,
+            "community_url": SERVER_INFO_COMMUNITY_URL,
+        }
+        try:
+            links_index = SERVER_INFO_SECTION_ORDER.index("links")
+        except ValueError:
+            links_index = -1
+
+        if links_index >= 0 and links_index < len(embeds):
+            for field in embeds[links_index].fields:
+                url_key = self.classify_server_info_link_field(field.name)
+                url = self.extract_first_http_url(str(field.value))
+                if url_key is not None and url is not None:
+                    urls[url_key] = url
+
+        return ServerInfoView(**urls)
+
     def serialize_embed_fields(self, embed: discord.Embed, *, limit: int = 4000) -> str:
         lines = []
         total_length = 0
@@ -2147,7 +2191,7 @@ class RhinoBot(commands.Bot):
         try:
             await message.edit(
                 embeds=embeds,
-                view=ServerInfoView(),
+                view=self.create_server_info_view_for_embeds(embeds),
                 allowed_mentions=discord.AllowedMentions.none(),
             )
         except discord.Forbidden:
@@ -6217,9 +6261,10 @@ class RhinoBot(commands.Bot):
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
 
+            embeds = self.create_server_info_embeds(interaction.guild)
             await target_channel.send(
-                embeds=self.create_server_info_embeds(interaction.guild),
-                view=ServerInfoView(),
+                embeds=embeds,
+                view=self.create_server_info_view_for_embeds(embeds),
                 allowed_mentions=discord.AllowedMentions.none(),
             )
         except discord.HTTPException:

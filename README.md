@@ -8,7 +8,7 @@ Python Discord bot for moderation, verification, modmail, private support ticket
 - Prefix commands: `help`, `afk`, and `prefix` with per-server `set`, `show`, and `reset`
 - DM-based modmail with an `Open Modmail` button
 - Persistent Northeast Esports verification panel that assigns the `Verified` role
-- Modern server-info hub preset with a banner, rules, links, verification CTA, level-role overview, and a modal editor for live posts
+- Modern server-info hub preset with a banner, rules, links, verification CTA, level-role overview, and a modal editor for live posts; link buttons follow the edited Links section
 - Forum-thread modmail relay between moderators and users
 - Persistent ticket panel with private per-member channels, staff claiming, participant management, and duplicate-ticket prevention
 - HTML ticket transcripts available on demand and automatically sent to the log channel and ticket opener when a ticket closes
