@@ -26,7 +26,7 @@ Fill these values:
 - `MODERATOR_ROLE_ID`
 - `ADMIN_ROLE_ID`
 - `VERIFIED_ROLE_ID` if you want the verification button to assign a specific role ID
-- `DATABASE_URL` if you want PostgreSQL storage for modlogs and persistent bot settings, including ticket configuration
+- `DATABASE_URL` if you want PostgreSQL storage for modlogs and persistent bot settings, including ticket configuration. The suggestion panel requires this.
 - Optional anti-raid tuning:
 - `ANTI_RAID_ENABLED`
 - `ANTI_RAID_JOIN_THRESHOLD`
@@ -81,6 +81,7 @@ You should see logs confirming:
 - staff application channel found
 - verified role found or `Verified` role-name fallback selected
 - persistent storage backend selected
+- suggestion PostgreSQL tables ready, when `DATABASE_URL` is set
 - anti-raid config values loaded
 
 ## 7. Test modmail
@@ -106,14 +107,21 @@ You should see logs confirming:
 4. Confirm the member receives the verified role
 5. Confirm a verification log message appears in `VERIFICATION_LOG_CHANNEL_ID`, or the server-log fallback channel
 
-## 10. Test staff applications
+## 10. Test suggestions
+
+1. Make sure `DATABASE_URL` is set on Railway or in `.env`
+2. Use `/suggestionpanel suggestions_channel:#suggestions` in the channel where you want the panel
+3. Click `Create Suggestion`, complete the modal, and confirm the suggestion appears in the configured channel
+4. Confirm the suggestion has a discussion thread, vote buttons, and staff moderation buttons
+
+## 11. Test staff applications
 
 1. Use `/staffapplypanel post` to post the staff application button panel
-2. Choose either Community Moderator or Support Moderator
+2. Choose `Tournament Referee`
 3. Complete the 2-page application form
 4. Use `/staffapplypanel disable` if you need to disable the posted panel later
 
-## 11. Test tickets
+## 12. Test tickets
 
 1. Use `/ticket panel` in a public support channel
 2. Click `Create Ticket` with a test member and confirm only that member and staff can see the new channel
@@ -121,6 +129,6 @@ You should see logs confirming:
 4. As an administrator, run `/ticket setlog` and choose a private staff transcript channel
 5. Close the ticket and confirm its HTML transcript appears in the selected channel
 
-## 12. PostgreSQL note
+## 13. PostgreSQL note
 
-If `DATABASE_URL` is set, the bot stores moderation logs and persistent feature settings, including ticket configuration, in PostgreSQL. If those database tables are empty, the bot imports existing local JSON data on startup. Without `DATABASE_URL`, the bot falls back to local JSON files and in-memory modlogs.
+If `DATABASE_URL` is set, the bot stores moderation logs and persistent feature settings, including ticket configuration, in PostgreSQL. Suggestions, votes, and suggestion configuration are PostgreSQL-only. If the older database tables are empty, the bot imports existing local JSON data on startup. Without `DATABASE_URL`, the suggestion panel is unavailable and the bot falls back to local JSON files and in-memory modlogs for older features.

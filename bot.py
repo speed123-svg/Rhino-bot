@@ -12,11 +12,16 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Deque, Dict, List, Optional, Tuple
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import discord
 import psycopg
 from discord import app_commands
 from discord.ext import commands, tasks
+from sqlalchemy import BigInteger, DateTime, ForeignKey, SmallInteger, String, Text, UniqueConstraint, func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from config import Settings, load_settings
 
@@ -61,6 +66,28 @@ NO_LINK_DATA_PATH = Path("no_link_channels.json")
 AFK_DATA_PATH = Path("afk_data.json")
 PREFIX_DATA_PATH = Path("prefix_data.json")
 TICKET_CONFIG_DATA_PATH = Path("ticket_config.json")
+SUGGESTION_STATUS_OPEN = "open"
+SUGGESTION_STATUS_ACCEPTED = "accepted"
+SUGGESTION_STATUS_REJECTED = "rejected"
+SUGGESTION_STATUS_CONSIDERING = "considering"
+SUGGESTION_STATUS_LABELS = {
+    SUGGESTION_STATUS_OPEN: "Open",
+    SUGGESTION_STATUS_ACCEPTED: "Accepted",
+    SUGGESTION_STATUS_REJECTED: "Rejected",
+    SUGGESTION_STATUS_CONSIDERING: "Considering",
+}
+SUGGESTION_STATUS_EMOJIS = {
+    SUGGESTION_STATUS_OPEN: "\U0001f4a1",
+    SUGGESTION_STATUS_ACCEPTED: "\u2705",
+    SUGGESTION_STATUS_REJECTED: "\u274c",
+    SUGGESTION_STATUS_CONSIDERING: "\U0001f914",
+}
+SUGGESTION_STATUS_COLORS = {
+    SUGGESTION_STATUS_OPEN: discord.Color.blurple(),
+    SUGGESTION_STATUS_ACCEPTED: discord.Color.green(),
+    SUGGESTION_STATUS_REJECTED: discord.Color.red(),
+    SUGGESTION_STATUS_CONSIDERING: discord.Color.gold(),
+}
 AFK_DEFAULT_REASON = "AFK"
 AFK_REASON_LIMIT = 200
 AFK_MENTION_REPLY_LIMIT = 5
@@ -157,8 +184,116 @@ class ReactionRoleConfig:
     role_id: int
 
 
+class SuggestionBase(DeclarativeBase):
+    pass
+
+
+class SuggestionConfigRecord(SuggestionBase):
+    __tablename__ = "suggestion_configs"
+
+    guild_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    suggestions_channel_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    panel_channel_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    panel_message_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    created_by: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+
+class SuggestionRecord(SuggestionBase):
+    __tablename__ = "suggestions"
+    __table_args__ = (
+        UniqueConstraint("guild_id", "message_id", name="suggestions_guild_message_unique"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    guild_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    channel_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    message_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True, index=True)
+    thread_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    author_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(120), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    category: Mapped[str] = mapped_column(String(80), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default=SUGGESTION_STATUS_OPEN)
+    staff_moderator_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    staff_moderated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+
+class SuggestionVoteRecord(SuggestionBase):
+    __tablename__ = "suggestion_votes"
+
+    suggestion_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("suggestions.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    guild_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    vote: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def build_async_database_url(database_url: str) -> str:
+    if database_url.startswith("postgresql+asyncpg://"):
+        return database_url
+    if database_url.startswith("postgresql://"):
+        return "postgresql+asyncpg://" + database_url.removeprefix("postgresql://")
+    if database_url.startswith("postgres://"):
+        return "postgresql+asyncpg://" + database_url.removeprefix("postgres://")
+    return database_url
+
+
+def build_async_database_settings(database_url: str) -> Tuple[str, dict]:
+    async_url = build_async_database_url(database_url)
+    parsed = urlsplit(async_url)
+    query_items = parse_qsl(parsed.query, keep_blank_values=True)
+    filtered_query_items: List[Tuple[str, str]] = []
+    connect_args = {}
+
+    for key, value in query_items:
+        if key.lower() != "sslmode":
+            filtered_query_items.append((key, value))
+            continue
+
+        sslmode = value.lower()
+        if sslmode in {"require", "verify-ca", "verify-full"}:
+            connect_args["ssl"] = True
+        elif sslmode == "disable":
+            connect_args["ssl"] = False
+
+    cleaned_url = urlunsplit(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            urlencode(filtered_query_items),
+            parsed.fragment,
+        )
+    )
+    return cleaned_url, connect_args
 
 
 def format_duration(delta: timedelta) -> str:
@@ -399,6 +534,108 @@ class ServerInfoView(discord.ui.View):
                 url=youtube_url,
             )
         )
+
+
+class SuggestionPanelView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+        self.add_item(
+            discord.ui.Button(
+                label="Create Suggestion",
+                emoji="\U0001f4a1",
+                style=discord.ButtonStyle.primary,
+                custom_id="suggestion:create",
+            )
+        )
+
+
+class SuggestionActionView(discord.ui.View):
+    def __init__(
+        self,
+        upvotes: int = 0,
+        downvotes: int = 0,
+    ) -> None:
+        super().__init__(timeout=None)
+        self.add_item(
+            discord.ui.Button(
+                label=str(upvotes),
+                emoji="\U0001f44d",
+                style=discord.ButtonStyle.success,
+                custom_id="suggestion:vote:up",
+            )
+        )
+        self.add_item(
+            discord.ui.Button(
+                label=str(downvotes),
+                emoji="\U0001f44e",
+                style=discord.ButtonStyle.danger,
+                custom_id="suggestion:vote:down",
+            )
+        )
+        self.add_item(
+            discord.ui.Button(
+                label="Accept",
+                emoji="\u2705",
+                style=discord.ButtonStyle.success,
+                custom_id="suggestion:moderate:accept",
+            )
+        )
+        self.add_item(
+            discord.ui.Button(
+                label="Reject",
+                emoji="\u274c",
+                style=discord.ButtonStyle.danger,
+                custom_id="suggestion:moderate:reject",
+            )
+        )
+        self.add_item(
+            discord.ui.Button(
+                label="Consider",
+                emoji="\U0001f914",
+                style=discord.ButtonStyle.secondary,
+                custom_id="suggestion:moderate:consider",
+            )
+        )
+
+
+class SuggestionModal(discord.ui.Modal, title="Create Suggestion"):
+    suggestion_title = discord.ui.TextInput(
+        label="Title",
+        style=discord.TextStyle.short,
+        placeholder="Summarize your suggestion.",
+        max_length=100,
+    )
+    suggestion_description = discord.ui.TextInput(
+        label="Description",
+        style=discord.TextStyle.paragraph,
+        placeholder="Describe the idea, why it helps, and any details staff should know.",
+        max_length=1800,
+    )
+    suggestion_category = discord.ui.TextInput(
+        label="Category",
+        style=discord.TextStyle.short,
+        placeholder="Community, event, Discord, gameplay, moderation...",
+        max_length=80,
+    )
+
+    def __init__(self, bot: "RhinoBot") -> None:
+        super().__init__()
+        self.bot = bot
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await self.bot.submit_suggestion_modal(
+            interaction,
+            self.suggestion_title.value,
+            self.suggestion_description.value,
+            self.suggestion_category.value,
+        )
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
+        LOGGER.exception("Suggestion modal failed for %s", interaction.user, exc_info=error)
+        if interaction.response.is_done():
+            await interaction.followup.send("The suggestion form failed. Please try again.", ephemeral=True)
+        else:
+            await interaction.response.send_message("The suggestion form failed. Please try again.", ephemeral=True)
 
 
 class StaffApplicationPageOneModal(discord.ui.Modal, title="Referee Application 1/2"):
@@ -808,6 +1045,8 @@ class RhinoBot(commands.Bot):
         self.guild_members_chunked: set[int] = set()
         self.previous_server_stats: Dict[int, tuple[Optional[int], Optional[int], int]] = {}
         self.uses_postgres = bool(self.settings.database_url)
+        self.suggestion_engine: Optional[AsyncEngine] = None
+        self.suggestion_session_factory: Optional[async_sessionmaker[AsyncSession]] = None
         self.modmail_view = OpenModmailView()
         self.close_modmail_view = CloseModmailView()
         self.ticket_panel_view = TicketPanelView()
@@ -815,6 +1054,8 @@ class RhinoBot(commands.Bot):
         self.ticket_close_confirm_view = TicketCloseConfirmView()
         self.verification_view = VerificationView()
         self.staff_application_view = StaffApplicationView()
+        self.suggestion_panel_view = SuggestionPanelView()
+        self.suggestion_action_view = SuggestionActionView()
 
     async def resolve_command_prefix(self, bot: commands.Bot, message: discord.Message) -> List[str]:
         if message.guild is None:
@@ -824,6 +1065,7 @@ class RhinoBot(commands.Bot):
     async def setup_hook(self) -> None:
         if self.uses_postgres:
             await asyncio.to_thread(self.ensure_postgres_schema)
+            await self.initialize_suggestion_database()
         await self.load_prefix_data()
         await self.load_ticket_config_data()
         await self.load_autoreact_data()
@@ -839,8 +1081,15 @@ class RhinoBot(commands.Bot):
         self.add_view(self.ticket_close_confirm_view)
         self.add_view(self.verification_view)
         self.add_view(self.staff_application_view)
+        self.add_view(self.suggestion_panel_view)
+        self.add_view(self.suggestion_action_view)
         self.cleanup_inactive_modmail.start()
         self.server_stats_loop.start()
+
+    async def close(self) -> None:
+        if self.suggestion_engine is not None:
+            await self.suggestion_engine.dispose()
+        await super().close()
 
     def ensure_postgres_schema(self) -> None:
         try:
@@ -927,6 +1176,34 @@ class RhinoBot(commands.Bot):
                 conn.commit()
         except Exception:
             LOGGER.exception("Failed to ensure PostgreSQL schema.")
+
+    async def initialize_suggestion_database(self) -> None:
+        if not self.settings.database_url:
+            return
+
+        try:
+            async_database_url, connect_args = build_async_database_settings(self.settings.database_url)
+            self.suggestion_engine = create_async_engine(
+                async_database_url,
+                connect_args=connect_args,
+                pool_pre_ping=True,
+            )
+            self.suggestion_session_factory = async_sessionmaker(
+                self.suggestion_engine,
+                expire_on_commit=False,
+            )
+            async with self.suggestion_engine.begin() as conn:
+                await conn.run_sync(SuggestionBase.metadata.create_all)
+            LOGGER.info("Suggestion system PostgreSQL tables are ready.")
+        except Exception:
+            LOGGER.exception("Failed to initialize suggestion PostgreSQL tables.")
+            if self.suggestion_engine is not None:
+                await self.suggestion_engine.dispose()
+            self.suggestion_engine = None
+            self.suggestion_session_factory = None
+
+    def suggestions_database_ready(self) -> bool:
+        return self.suggestion_session_factory is not None
 
     async def on_ready(self) -> None:
         synced = await self.tree.sync()
@@ -1261,6 +1538,24 @@ class RhinoBot(commands.Bot):
                 LOGGER.info("Verification button clicked by %s (%s)", interaction.user, interaction.user.id)
                 await self.handle_verification_button(interaction)
                 return
+            if custom_id == "suggestion:create":
+                await self.open_suggestion_modal(interaction)
+                return
+            if custom_id == "suggestion:vote:up":
+                await self.handle_suggestion_vote(interaction, 1)
+                return
+            if custom_id == "suggestion:vote:down":
+                await self.handle_suggestion_vote(interaction, -1)
+                return
+            if custom_id == "suggestion:moderate:accept":
+                await self.handle_suggestion_moderation(interaction, SUGGESTION_STATUS_ACCEPTED)
+                return
+            if custom_id == "suggestion:moderate:reject":
+                await self.handle_suggestion_moderation(interaction, SUGGESTION_STATUS_REJECTED)
+                return
+            if custom_id == "suggestion:moderate:consider":
+                await self.handle_suggestion_moderation(interaction, SUGGESTION_STATUS_CONSIDERING)
+                return
 
     def register_commands(self) -> None:
         tree = self.tree
@@ -1317,6 +1612,11 @@ class RhinoBot(commands.Bot):
             embed.add_field(
                 name="Verification",
                 value="`/verificationpanel` post the Northeast Esports verification panel.",
+                inline=False,
+            )
+            embed.add_field(
+                name="Suggestions",
+                value="`/suggestionpanel` posts a persistent suggestion panel backed by PostgreSQL.",
                 inline=False,
             )
             embed.add_field(
@@ -1526,6 +1826,18 @@ class RhinoBot(commands.Bot):
             channel: Optional[discord.TextChannel] = None,
         ) -> None:
             await self.handle_verification_panel(interaction, channel)
+
+        @tree.command(name="suggestionpanel", description="Post a persistent suggestion panel")
+        @app_commands.describe(
+            suggestions_channel="Channel where submitted suggestions should be posted",
+            panel_channel="Channel where the suggestion panel should be posted",
+        )
+        async def suggestionpanel(
+            interaction: discord.Interaction,
+            suggestions_channel: discord.TextChannel,
+            panel_channel: Optional[discord.TextChannel] = None,
+        ) -> None:
+            await self.handle_suggestion_panel(interaction, suggestions_channel, panel_channel)
 
         serverinfo = app_commands.Group(
             name="serverinfo",
@@ -1904,6 +2216,321 @@ class RhinoBot(commands.Bot):
                 return role
 
         return discord.utils.get(guild.roles, name="Verified")
+
+    def create_suggestion_panel_embed(self, suggestions_channel: discord.TextChannel) -> discord.Embed:
+        embed = make_embed(
+            "Suggestion Panel",
+            (
+                f"Help improve **{self.settings.server_name}** by sharing clear, constructive ideas.\n\n"
+                "Press **Create Suggestion** to submit a title, description, and category. "
+                f"Approved submissions are posted in {suggestions_channel.mention} with voting and a discussion thread."
+            ),
+            discord.Color.blurple(),
+        )
+        embed.add_field(
+            name="Submission Guidelines",
+            value=(
+                "Keep suggestions specific, respectful, and useful for the community. "
+                "Staff may mark suggestions as accepted, rejected, or under consideration."
+            ),
+            inline=False,
+        )
+        return embed
+
+    def create_suggestion_action_view(self, upvotes: int = 0, downvotes: int = 0) -> SuggestionActionView:
+        return SuggestionActionView(upvotes, downvotes)
+
+    def create_suggestion_thread_name(self, suggestion_id: int, title: str) -> str:
+        cleaned = re.sub(r"\s+", " ", title).strip()
+        return truncate_text(f"Suggestion #{suggestion_id}: {cleaned}", 100)
+
+    def create_suggestion_embed(
+        self,
+        suggestion: SuggestionRecord,
+        upvotes: int,
+        downvotes: int,
+        *,
+        author: Optional[discord.abc.User] = None,
+    ) -> discord.Embed:
+        status = suggestion.status if suggestion.status in SUGGESTION_STATUS_LABELS else SUGGESTION_STATUS_OPEN
+        status_label = SUGGESTION_STATUS_LABELS[status]
+        status_emoji = SUGGESTION_STATUS_EMOJIS[status]
+        embed = discord.Embed(
+            title=truncate_text(f"Suggestion #{suggestion.id}: {suggestion.title}", 256),
+            description=truncate_text(suggestion.description, 3500),
+            color=SUGGESTION_STATUS_COLORS[status],
+            timestamp=getattr(suggestion, "created_at", None) or utc_now(),
+        )
+        submitter = author.mention if author is not None else f"<@{suggestion.author_id}>"
+        embed.add_field(name="Submitted By", value=f"{submitter}\n`{suggestion.author_id}`", inline=True)
+        embed.add_field(name="Category", value=truncate_text(suggestion.category, 256), inline=True)
+        embed.add_field(name="Status", value=f"{status_emoji} {status_label}", inline=True)
+        embed.add_field(
+            name="Votes",
+            value=f"\U0001f44d {upvotes}  |  \U0001f44e {downvotes}  |  Score `{upvotes - downvotes}`",
+            inline=False,
+        )
+        if suggestion.thread_id:
+            embed.add_field(name="Discussion", value=f"<#{suggestion.thread_id}>", inline=False)
+        if suggestion.staff_moderator_id and suggestion.staff_moderated_at:
+            embed.add_field(
+                name="Staff Update",
+                value=(
+                    f"Marked **{status_label}** by <@{suggestion.staff_moderator_id}> "
+                    f"{discord.utils.format_dt(suggestion.staff_moderated_at, 'R')}"
+                ),
+                inline=False,
+            )
+        if author is not None:
+            embed.set_thumbnail(url=author.display_avatar.url)
+        else:
+            set_default_thumbnail(embed)
+        embed.set_footer(text=f"Suggestion ID: {suggestion.id} | {BRAND_FOOTER}")
+        return embed
+
+    def channel_missing_permissions(
+        self,
+        channel: discord.TextChannel,
+        member: discord.Member,
+        required_permissions: Tuple[Tuple[str, str], ...],
+    ) -> List[str]:
+        permissions = channel.permissions_for(member)
+        return [
+            label
+            for attribute, label in required_permissions
+            if not getattr(permissions, attribute, False)
+        ]
+
+    async def fetch_suggestion_text_channel(
+        self,
+        guild: discord.Guild,
+        channel_id: int,
+    ) -> Optional[discord.TextChannel]:
+        channel = guild.get_channel(channel_id) or self.get_channel(channel_id)
+        if channel is None:
+            try:
+                channel = await self.fetch_channel(channel_id)
+            except discord.HTTPException:
+                LOGGER.exception("Could not fetch suggestion channel %s", channel_id)
+                return None
+        if isinstance(channel, discord.TextChannel) and channel.guild.id == guild.id:
+            return channel
+        return None
+
+    async def get_suggestion_config(self, guild_id: int) -> Optional[SuggestionConfigRecord]:
+        if self.suggestion_session_factory is None:
+            return None
+
+        async with self.suggestion_session_factory() as session:
+            result = await session.execute(
+                select(SuggestionConfigRecord).where(SuggestionConfigRecord.guild_id == guild_id)
+            )
+            return result.scalar_one_or_none()
+
+    async def upsert_suggestion_config(
+        self,
+        guild_id: int,
+        suggestions_channel_id: int,
+        panel_channel_id: int,
+        panel_message_id: int,
+        created_by: int,
+    ) -> None:
+        if self.suggestion_session_factory is None:
+            raise RuntimeError("Suggestion database is not available.")
+
+        stmt = pg_insert(SuggestionConfigRecord).values(
+            guild_id=guild_id,
+            suggestions_channel_id=suggestions_channel_id,
+            panel_channel_id=panel_channel_id,
+            panel_message_id=panel_message_id,
+            created_by=created_by,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[SuggestionConfigRecord.guild_id],
+            set_={
+                "suggestions_channel_id": suggestions_channel_id,
+                "panel_channel_id": panel_channel_id,
+                "panel_message_id": panel_message_id,
+                "created_by": created_by,
+                "updated_at": func.now(),
+            },
+        )
+        async with self.suggestion_session_factory() as session:
+            await session.execute(stmt)
+            await session.commit()
+
+    async def create_pending_suggestion(
+        self,
+        guild_id: int,
+        channel_id: int,
+        author_id: int,
+        title: str,
+        description: str,
+        category: str,
+    ) -> SuggestionRecord:
+        if self.suggestion_session_factory is None:
+            raise RuntimeError("Suggestion database is not available.")
+
+        suggestion = SuggestionRecord(
+            guild_id=guild_id,
+            channel_id=channel_id,
+            author_id=author_id,
+            title=title,
+            description=description,
+            category=category,
+            status=SUGGESTION_STATUS_OPEN,
+        )
+        async with self.suggestion_session_factory() as session:
+            session.add(suggestion)
+            await session.commit()
+            await session.refresh(suggestion)
+            return suggestion
+
+    async def delete_suggestion_record(self, suggestion_id: int) -> None:
+        if self.suggestion_session_factory is None:
+            return
+
+        async with self.suggestion_session_factory() as session:
+            suggestion = await session.get(SuggestionRecord, suggestion_id)
+            if suggestion is not None:
+                await session.delete(suggestion)
+                await session.commit()
+
+    async def update_suggestion_delivery(
+        self,
+        suggestion_id: int,
+        message_id: int,
+        thread_id: Optional[int],
+    ) -> Optional[SuggestionRecord]:
+        if self.suggestion_session_factory is None:
+            return None
+
+        async with self.suggestion_session_factory() as session:
+            suggestion = await session.get(SuggestionRecord, suggestion_id)
+            if suggestion is None:
+                return None
+            suggestion.message_id = message_id
+            suggestion.thread_id = thread_id
+            suggestion.updated_at = utc_now()
+            await session.commit()
+            await session.refresh(suggestion)
+            return suggestion
+
+    async def get_suggestion_by_message(
+        self,
+        guild_id: int,
+        message_id: int,
+    ) -> Optional[SuggestionRecord]:
+        if self.suggestion_session_factory is None:
+            return None
+
+        async with self.suggestion_session_factory() as session:
+            result = await session.execute(
+                select(SuggestionRecord).where(
+                    SuggestionRecord.guild_id == guild_id,
+                    SuggestionRecord.message_id == message_id,
+                )
+            )
+            return result.scalar_one_or_none()
+
+    async def count_suggestion_votes(
+        self,
+        session: AsyncSession,
+        suggestion_id: int,
+    ) -> Tuple[int, int]:
+        result = await session.execute(
+            select(SuggestionVoteRecord.vote, func.count(SuggestionVoteRecord.user_id))
+            .where(SuggestionVoteRecord.suggestion_id == suggestion_id)
+            .group_by(SuggestionVoteRecord.vote)
+        )
+        upvotes = 0
+        downvotes = 0
+        for vote, count in result.all():
+            if int(vote) == 1:
+                upvotes = int(count)
+            elif int(vote) == -1:
+                downvotes = int(count)
+        return upvotes, downvotes
+
+    async def apply_suggestion_vote(
+        self,
+        guild_id: int,
+        message_id: int,
+        user_id: int,
+        vote: int,
+    ) -> Tuple[Optional[SuggestionRecord], int, int, str]:
+        if self.suggestion_session_factory is None:
+            return None, 0, 0, "missing"
+
+        async with self.suggestion_session_factory() as session:
+            result = await session.execute(
+                select(SuggestionRecord).where(
+                    SuggestionRecord.guild_id == guild_id,
+                    SuggestionRecord.message_id == message_id,
+                )
+            )
+            suggestion = result.scalar_one_or_none()
+            if suggestion is None:
+                return None, 0, 0, "missing"
+
+            existing = await session.get(
+                SuggestionVoteRecord,
+                {"suggestion_id": suggestion.id, "user_id": user_id},
+            )
+            if existing is not None and existing.vote == vote:
+                await session.delete(existing)
+                action = "removed"
+            elif existing is not None:
+                existing.vote = vote
+                existing.updated_at = utc_now()
+                action = "updated"
+            else:
+                session.add(
+                    SuggestionVoteRecord(
+                        suggestion_id=suggestion.id,
+                        guild_id=guild_id,
+                        user_id=user_id,
+                        vote=vote,
+                    )
+                )
+                action = "recorded"
+
+            await session.flush()
+            upvotes, downvotes = await self.count_suggestion_votes(session, suggestion.id)
+            await session.commit()
+            await session.refresh(suggestion)
+            return suggestion, upvotes, downvotes, action
+
+    async def set_suggestion_status(
+        self,
+        guild_id: int,
+        message_id: int,
+        status: str,
+        moderator_id: int,
+    ) -> Tuple[Optional[SuggestionRecord], int, int]:
+        if self.suggestion_session_factory is None:
+            return None, 0, 0
+
+        async with self.suggestion_session_factory() as session:
+            result = await session.execute(
+                select(SuggestionRecord).where(
+                    SuggestionRecord.guild_id == guild_id,
+                    SuggestionRecord.message_id == message_id,
+                )
+            )
+            suggestion = result.scalar_one_or_none()
+            if suggestion is None:
+                return None, 0, 0
+
+            suggestion.status = status
+            suggestion.staff_moderator_id = moderator_id
+            suggestion.staff_moderated_at = utc_now()
+            suggestion.updated_at = utc_now()
+            await session.flush()
+            upvotes, downvotes = await self.count_suggestion_votes(session, suggestion.id)
+            await session.commit()
+            await session.refresh(suggestion)
+            return suggestion, upvotes, downvotes
 
     def find_text_channel_by_name(self, guild: discord.Guild, channel_name: str) -> Optional[discord.TextChannel]:
         normalized_target = channel_name.strip().lower().lstrip("#")
@@ -6443,6 +7070,500 @@ class RhinoBot(commands.Bot):
         await self.send_interaction_message(
             interaction,
             f"Verification panel posted in {target_channel.mention}.",
+            ephemeral=True,
+        )
+
+    async def handle_suggestion_panel(
+        self,
+        interaction: discord.Interaction,
+        suggestions_channel: discord.TextChannel,
+        panel_channel: Optional[discord.TextChannel],
+    ) -> None:
+        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+            await self.send_interaction_message(interaction, "This command can only be used inside a server.", ephemeral=True)
+            return
+        if not self.has_admin_access(interaction.user):
+            await self.send_interaction_message(interaction, NO_PERMISSION, ephemeral=True)
+            return
+        if not self.suggestions_database_ready():
+            await self.send_interaction_message(
+                interaction,
+                "Suggestion panels require PostgreSQL. Set `DATABASE_URL` on Railway and restart the bot.",
+                ephemeral=True,
+            )
+            return
+        if suggestions_channel.guild.id != interaction.guild.id:
+            await self.send_interaction_message(interaction, "Choose a suggestions channel from this server.", ephemeral=True)
+            return
+
+        target_channel = panel_channel
+        if target_channel is None:
+            if isinstance(interaction.channel, discord.TextChannel):
+                target_channel = interaction.channel
+            else:
+                await self.send_interaction_message(interaction, "Choose a text channel for the suggestion panel.", ephemeral=True)
+                return
+        if target_channel.guild.id != interaction.guild.id:
+            await self.send_interaction_message(interaction, "Choose a panel channel from this server.", ephemeral=True)
+            return
+
+        bot_member = interaction.guild.me
+        if bot_member is None and self.user is not None:
+            bot_member = interaction.guild.get_member(self.user.id)
+        if bot_member is None:
+            await self.send_interaction_message(interaction, "I could not verify my channel permissions right now.", ephemeral=True)
+            return
+
+        panel_missing = self.channel_missing_permissions(
+            target_channel,
+            bot_member,
+            (
+                ("view_channel", "View Channel"),
+                ("send_messages", "Send Messages"),
+                ("embed_links", "Embed Links"),
+            ),
+        )
+        if panel_missing:
+            await self.send_interaction_message(
+                interaction,
+                f"I need {', '.join(panel_missing)} in {target_channel.mention} to post the panel.",
+                ephemeral=True,
+            )
+            return
+
+        suggestion_missing = self.channel_missing_permissions(
+            suggestions_channel,
+            bot_member,
+            (
+                ("view_channel", "View Channel"),
+                ("send_messages", "Send Messages"),
+                ("embed_links", "Embed Links"),
+                ("create_public_threads", "Create Public Threads"),
+                ("send_messages_in_threads", "Send Messages in Threads"),
+            ),
+        )
+        if suggestion_missing:
+            await self.send_interaction_message(
+                interaction,
+                f"I need {', '.join(suggestion_missing)} in {suggestions_channel.mention} for suggestions.",
+                ephemeral=True,
+            )
+            return
+
+        if not await self.defer_interaction_once(interaction, ephemeral=True, thinking=True):
+            return
+
+        try:
+            panel_message = await target_channel.send(
+                embed=self.create_suggestion_panel_embed(suggestions_channel),
+                view=self.suggestion_panel_view,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except discord.HTTPException:
+            LOGGER.exception("Failed to post suggestion panel in channel %s", target_channel.id)
+            await self.send_interaction_message(
+                interaction,
+                "I could not post the suggestion panel right now. Please check my permissions and try again.",
+                ephemeral=True,
+            )
+            return
+
+        try:
+            await self.upsert_suggestion_config(
+                interaction.guild.id,
+                suggestions_channel.id,
+                target_channel.id,
+                panel_message.id,
+                interaction.user.id,
+            )
+        except Exception:
+            LOGGER.exception("Failed to save suggestion panel config for guild %s", interaction.guild.id)
+            try:
+                await panel_message.delete()
+            except discord.HTTPException:
+                LOGGER.warning("Could not delete suggestion panel after config save failed: %s", panel_message.id)
+            await self.send_interaction_message(
+                interaction,
+                "I posted the panel, but could not save its PostgreSQL configuration. The panel was removed.",
+                ephemeral=True,
+            )
+            return
+
+        await self.send_interaction_message(
+            interaction,
+            f"Suggestion panel posted in {target_channel.mention}. New suggestions will go to {suggestions_channel.mention}.",
+            ephemeral=True,
+        )
+
+    async def open_suggestion_modal(self, interaction: discord.Interaction) -> None:
+        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+            await self.send_interaction_message(interaction, "Suggestions can only be submitted inside a server.", ephemeral=True)
+            return
+        if interaction.user.bot:
+            await self.send_interaction_message(interaction, "Bots cannot submit suggestions.", ephemeral=True)
+            return
+        if not self.suggestions_database_ready():
+            await self.send_interaction_message(
+                interaction,
+                "Suggestions are not available because PostgreSQL is not connected.",
+                ephemeral=True,
+            )
+            return
+
+        try:
+            config = await self.get_suggestion_config(interaction.guild.id)
+        except Exception:
+            LOGGER.exception("Failed to load suggestion config for guild %s", interaction.guild.id)
+            await self.send_interaction_message(
+                interaction,
+                "I could not load the suggestion configuration right now. Please try again later.",
+                ephemeral=True,
+            )
+            return
+
+        if config is None:
+            await self.send_interaction_message(
+                interaction,
+                "Suggestions are not configured yet. Ask an administrator to run `/suggestionpanel`.",
+                ephemeral=True,
+            )
+            return
+
+        target_channel = await self.fetch_suggestion_text_channel(interaction.guild, config.suggestions_channel_id)
+        if target_channel is None:
+            await self.send_interaction_message(
+                interaction,
+                "The configured suggestions channel is no longer available. Ask an administrator to run `/suggestionpanel` again.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_modal(SuggestionModal(self))
+
+    async def submit_suggestion_modal(
+        self,
+        interaction: discord.Interaction,
+        title: str,
+        description: str,
+        category: str,
+    ) -> None:
+        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+            await interaction.response.send_message("Suggestions can only be submitted inside a server.", ephemeral=True)
+            return
+        if not self.suggestions_database_ready():
+            await interaction.response.send_message(
+                "Suggestions are not available because PostgreSQL is not connected.",
+                ephemeral=True,
+            )
+            return
+
+        clean_title = re.sub(r"\s+", " ", title).strip()
+        clean_description = description.strip()
+        clean_category = re.sub(r"\s+", " ", category).strip()
+        if not clean_title or not clean_description or not clean_category:
+            await interaction.response.send_message("Please fill in the title, description, and category.", ephemeral=True)
+            return
+
+        clean_title = truncate_text(clean_title, 100)
+        clean_description = truncate_text(clean_description, 1800)
+        clean_category = truncate_text(clean_category, 80)
+
+        if not await self.defer_interaction_once(interaction, ephemeral=True, thinking=True):
+            return
+
+        try:
+            config = await self.get_suggestion_config(interaction.guild.id)
+        except Exception:
+            LOGGER.exception("Failed to load suggestion config for guild %s", interaction.guild.id)
+            await self.send_interaction_message(
+                interaction,
+                "I could not load the suggestion configuration right now. Please try again later.",
+                ephemeral=True,
+            )
+            return
+
+        if config is None:
+            await self.send_interaction_message(
+                interaction,
+                "Suggestions are not configured yet. Ask an administrator to run `/suggestionpanel`.",
+                ephemeral=True,
+            )
+            return
+
+        target_channel = await self.fetch_suggestion_text_channel(interaction.guild, config.suggestions_channel_id)
+        if target_channel is None:
+            await self.send_interaction_message(
+                interaction,
+                "The configured suggestions channel is no longer available. Ask an administrator to run `/suggestionpanel` again.",
+                ephemeral=True,
+            )
+            return
+
+        bot_member = interaction.guild.me
+        if bot_member is None and self.user is not None:
+            bot_member = interaction.guild.get_member(self.user.id)
+        if bot_member is None:
+            await self.send_interaction_message(interaction, "I could not verify my channel permissions right now.", ephemeral=True)
+            return
+
+        missing = self.channel_missing_permissions(
+            target_channel,
+            bot_member,
+            (
+                ("view_channel", "View Channel"),
+                ("send_messages", "Send Messages"),
+                ("embed_links", "Embed Links"),
+                ("create_public_threads", "Create Public Threads"),
+                ("send_messages_in_threads", "Send Messages in Threads"),
+            ),
+        )
+        if missing:
+            await self.send_interaction_message(
+                interaction,
+                f"I need {', '.join(missing)} in {target_channel.mention} before suggestions can be posted there.",
+                ephemeral=True,
+            )
+            return
+
+        try:
+            suggestion = await self.create_pending_suggestion(
+                interaction.guild.id,
+                target_channel.id,
+                interaction.user.id,
+                clean_title,
+                clean_description,
+                clean_category,
+            )
+        except Exception:
+            LOGGER.exception("Failed to save pending suggestion for guild %s", interaction.guild.id)
+            await self.send_interaction_message(
+                interaction,
+                "I could not save your suggestion right now. Please try again later.",
+                ephemeral=True,
+            )
+            return
+
+        try:
+            message = await target_channel.send(
+                embed=self.create_suggestion_embed(suggestion, 0, 0, author=interaction.user),
+                view=self.create_suggestion_action_view(),
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except discord.HTTPException:
+            LOGGER.exception("Failed to post suggestion %s in channel %s", suggestion.id, target_channel.id)
+            try:
+                await self.delete_suggestion_record(suggestion.id)
+            except Exception:
+                LOGGER.exception("Failed to remove unposted suggestion %s", suggestion.id)
+            await self.send_interaction_message(
+                interaction,
+                "I could not post your suggestion right now. Please try again later.",
+                ephemeral=True,
+            )
+            return
+
+        try:
+            updated_suggestion = await self.update_suggestion_delivery(suggestion.id, message.id, None)
+        except Exception:
+            LOGGER.exception("Failed to save Discord message ID for suggestion %s", suggestion.id)
+            updated_suggestion = None
+
+        if updated_suggestion is None:
+            try:
+                await message.delete()
+            except discord.HTTPException:
+                LOGGER.warning("Could not delete suggestion message after delivery save failed: %s", message.id)
+            await self.send_interaction_message(
+                interaction,
+                "I posted your suggestion, but could not save its PostgreSQL message link. The post was removed; please try again.",
+                ephemeral=True,
+            )
+            return
+
+        thread_warning = ""
+        try:
+            thread = await message.create_thread(
+                name=self.create_suggestion_thread_name(suggestion.id, clean_title),
+                auto_archive_duration=1440,
+                reason=f"Discussion thread for suggestion #{suggestion.id}",
+            )
+            try:
+                await thread.send(
+                    f"Discussion thread for suggestion #{suggestion.id}. Keep feedback constructive and on topic.",
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            except discord.HTTPException:
+                LOGGER.warning("Could not send intro message in suggestion thread %s", thread.id)
+            try:
+                refreshed_suggestion = await self.update_suggestion_delivery(suggestion.id, message.id, thread.id)
+                if refreshed_suggestion is not None:
+                    updated_suggestion = refreshed_suggestion
+            except Exception:
+                LOGGER.exception("Failed to save discussion thread ID for suggestion %s", suggestion.id)
+                thread_warning = " The discussion thread was created, but I could not save its ID."
+        except discord.HTTPException:
+            LOGGER.exception("Failed to create discussion thread for suggestion %s", suggestion.id)
+            thread_warning = " I posted it, but could not create the discussion thread."
+
+        try:
+            await message.edit(
+                embed=self.create_suggestion_embed(updated_suggestion, 0, 0, author=interaction.user),
+                view=self.create_suggestion_action_view(),
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except discord.HTTPException:
+            LOGGER.warning("Could not refresh suggestion embed after posting message %s", message.id)
+
+        await self.send_interaction_message(
+            interaction,
+            f"Your suggestion has been posted in {target_channel.mention}: {message.jump_url}.{thread_warning}",
+            ephemeral=True,
+        )
+
+    async def refresh_suggestion_message(
+        self,
+        message: discord.Message,
+        suggestion: SuggestionRecord,
+        upvotes: int,
+        downvotes: int,
+    ) -> None:
+        author = self.get_user(suggestion.author_id)
+        try:
+            await message.edit(
+                embed=self.create_suggestion_embed(suggestion, upvotes, downvotes, author=author),
+                view=self.create_suggestion_action_view(upvotes, downvotes),
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except discord.HTTPException:
+            LOGGER.exception("Failed to refresh suggestion message %s", message.id)
+
+    async def handle_suggestion_vote(self, interaction: discord.Interaction, vote: int) -> None:
+        if interaction.guild is None or not isinstance(interaction.message, discord.Message):
+            await self.send_interaction_message(interaction, "This suggestion vote is no longer available.", ephemeral=True)
+            return
+        if interaction.user.bot:
+            await self.send_interaction_message(interaction, "Bots cannot vote on suggestions.", ephemeral=True)
+            return
+        if not self.suggestions_database_ready():
+            await self.send_interaction_message(interaction, "Suggestions are not available because PostgreSQL is not connected.", ephemeral=True)
+            return
+
+        if not await self.defer_interaction_once(interaction, ephemeral=True):
+            return
+
+        try:
+            suggestion, upvotes, downvotes, action = await self.apply_suggestion_vote(
+                interaction.guild.id,
+                interaction.message.id,
+                interaction.user.id,
+                vote,
+            )
+        except Exception:
+            LOGGER.exception("Failed to record suggestion vote on message %s", interaction.message.id)
+            await self.send_interaction_message(
+                interaction,
+                "I could not record your vote right now. Please try again later.",
+                ephemeral=True,
+            )
+            return
+
+        if suggestion is None:
+            await self.send_interaction_message(
+                interaction,
+                "I could not find this suggestion in PostgreSQL.",
+                ephemeral=True,
+            )
+            return
+
+        await self.refresh_suggestion_message(interaction.message, suggestion, upvotes, downvotes)
+        vote_label = "upvote" if vote == 1 else "downvote"
+        if action == "removed":
+            response = f"Your {vote_label} was removed."
+        elif action == "updated":
+            response = f"Your vote was changed to a {vote_label}."
+        else:
+            response = f"Your {vote_label} was recorded."
+        await self.send_interaction_message(interaction, response, ephemeral=True)
+
+    async def announce_suggestion_moderation(
+        self,
+        suggestion: SuggestionRecord,
+        moderator: discord.abc.User,
+    ) -> None:
+        if not suggestion.thread_id:
+            return
+
+        thread = self.get_channel(suggestion.thread_id)
+        if thread is None:
+            try:
+                fetched = await self.fetch_channel(suggestion.thread_id)
+            except discord.HTTPException:
+                LOGGER.warning("Could not fetch suggestion thread %s", suggestion.thread_id)
+                return
+            thread = fetched
+        if not isinstance(thread, discord.Thread):
+            return
+
+        status = suggestion.status if suggestion.status in SUGGESTION_STATUS_LABELS else SUGGESTION_STATUS_OPEN
+        embed = make_embed(
+            "Suggestion Status Updated",
+            (
+                f"{SUGGESTION_STATUS_EMOJIS[status]} Suggestion #{suggestion.id} was marked "
+                f"**{SUGGESTION_STATUS_LABELS[status]}** by {moderator.mention}."
+            ),
+            SUGGESTION_STATUS_COLORS[status],
+        )
+        try:
+            await thread.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+        except discord.HTTPException:
+            LOGGER.warning("Could not announce suggestion moderation in thread %s", suggestion.thread_id)
+
+    async def handle_suggestion_moderation(self, interaction: discord.Interaction, status: str) -> None:
+        if interaction.guild is None or not isinstance(interaction.message, discord.Message):
+            await self.send_interaction_message(interaction, "This suggestion moderation action is no longer available.", ephemeral=True)
+            return
+        if not isinstance(interaction.user, discord.Member) or not self.has_staff_access(interaction.user, "manage_messages"):
+            await self.send_interaction_message(interaction, NO_PERMISSION, ephemeral=True)
+            return
+        if status not in SUGGESTION_STATUS_LABELS or status == SUGGESTION_STATUS_OPEN:
+            await self.send_interaction_message(interaction, "Choose a valid suggestion status.", ephemeral=True)
+            return
+        if not self.suggestions_database_ready():
+            await self.send_interaction_message(interaction, "Suggestions are not available because PostgreSQL is not connected.", ephemeral=True)
+            return
+
+        if not await self.defer_interaction_once(interaction, ephemeral=True):
+            return
+
+        try:
+            suggestion, upvotes, downvotes = await self.set_suggestion_status(
+                interaction.guild.id,
+                interaction.message.id,
+                status,
+                interaction.user.id,
+            )
+        except Exception:
+            LOGGER.exception("Failed to moderate suggestion on message %s", interaction.message.id)
+            await self.send_interaction_message(
+                interaction,
+                "I could not update that suggestion right now. Please try again later.",
+                ephemeral=True,
+            )
+            return
+
+        if suggestion is None:
+            await self.send_interaction_message(
+                interaction,
+                "I could not find this suggestion in PostgreSQL.",
+                ephemeral=True,
+            )
+            return
+
+        await self.refresh_suggestion_message(interaction.message, suggestion, upvotes, downvotes)
+        await self.announce_suggestion_moderation(suggestion, interaction.user)
+        await self.send_interaction_message(
+            interaction,
+            f"Suggestion #{suggestion.id} marked {SUGGESTION_STATUS_LABELS[status]}.",
             ephemeral=True,
         )
 
