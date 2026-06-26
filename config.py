@@ -29,6 +29,7 @@ class Settings:
     ticket_category_id: int = 0
     ticket_transcript_channel_id: int = 0
     verified_role_id: int = 0
+    asset_channel_id: int = 0
     database_url: str = ""
     anti_raid_enabled: bool = True
     anti_raid_join_threshold: int = 5
@@ -116,6 +117,7 @@ def load_settings() -> Settings:
         moderator_role_id=_require_int("MODERATOR_ROLE_ID"),
         admin_role_id=_require_int("ADMIN_ROLE_ID"),
         verified_role_id=_get_optional_int("VERIFIED_ROLE_ID"),
+        asset_channel_id=_get_optional_int("ASSET_CHANNEL_ID"),
         database_url=os.getenv("DATABASE_URL", "").strip(),
         anti_raid_enabled=_get_bool("ANTI_RAID_ENABLED", True),
         anti_raid_join_threshold=_get_int("ANTI_RAID_JOIN_THRESHOLD", 5, minimum=2),

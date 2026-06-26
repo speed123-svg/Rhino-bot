@@ -20,13 +20,14 @@ Fill these values:
 - `INVITE_LOG_CHANNEL_ID` if you want invite create and delete logs in a separate text channel
 - `VERIFICATION_LOG_CHANNEL_ID` if you want successful verification logs in a separate text channel
 - `WELCOME_CHANNEL_ID` if you want automatic welcome messages in a separate text channel
+- `ASSET_CHANNEL_ID` if you want uploaded NE Coins and shop item images mirrored to a private asset channel
 - `TICKET_CATEGORY_ID` if you want tickets in a specific category; otherwise the bot uses or creates `Tickets`
 - `TICKET_TRANSCRIPT_CHANNEL_ID` if you want transcripts outside the moderation log channel
 - `STAFF_APPLICATION_CHANNEL_ID`
 - `MODERATOR_ROLE_ID`
 - `ADMIN_ROLE_ID`
 - `VERIFIED_ROLE_ID` if you want the verification button to assign a specific role ID
-- `DATABASE_URL` if you want PostgreSQL storage for modlogs and persistent bot settings, including ticket configuration. The suggestion panel requires this.
+- `DATABASE_URL` if you want PostgreSQL storage for modlogs and persistent bot settings, including ticket configuration. The suggestion panel and NE Coins/shop system require this.
 - Optional anti-raid tuning:
 - `ANTI_RAID_ENABLED`
 - `ANTI_RAID_JOIN_THRESHOLD`
@@ -58,6 +59,7 @@ Make sure the bot can:
 - Ban members
 - Manage messages
 - Manage channels
+- Manage roles
 - Attach files
 
 ## 5. Start the bot
@@ -78,10 +80,11 @@ You should see logs confirming:
 - invite log channel found or server or mod-log fallback selected
 - verification log channel found or server or mod-log fallback selected
 - welcome channel found or welcome messages disabled
+- asset channel found or uploaded economy images using original attachment URLs
 - staff application channel found
 - verified role found or `Verified` role-name fallback selected
 - persistent storage backend selected
-- suggestion PostgreSQL tables ready, when `DATABASE_URL` is set
+- async PostgreSQL feature tables ready, when `DATABASE_URL` is set
 - anti-raid config values loaded
 
 ## 7. Test modmail
@@ -114,14 +117,24 @@ You should see logs confirming:
 3. Click `Create Suggestion`, complete the modal, and confirm the suggestion appears in the configured channel
 4. Confirm the suggestion has a discussion thread, vote buttons, and staff moderation buttons
 
-## 11. Test staff applications
+## 11. Test NE Coins and shop
+
+1. Make sure `DATABASE_URL` is set on Railway or in `.env`
+2. Create a private `#bot-assets` channel and set `ASSET_CHANNEL_ID` if you want uploaded images mirrored
+3. Use `/coins image` with an uploaded image for the NE Coins icon
+4. Use `/coins give user:@member amount:100 reason:test` to grant coins
+5. Use `/shop create` with a name, price, description, optional uploaded image, and optional role reward
+6. Use `/shop list`, `/shop view`, and `/shop buy` with a test member
+7. Use `/inventory` to confirm the purchase and `/shop fulfill` for manual rewards
+
+## 12. Test staff applications
 
 1. Use `/staffapplypanel post` to post the staff application button panel
 2. Choose `Tournament Referee`
 3. Complete the 2-page application form
 4. Use `/staffapplypanel disable` if you need to disable the posted panel later
 
-## 12. Test tickets
+## 13. Test tickets
 
 1. Use `/ticket panel` in a public support channel
 2. Click `Create Ticket` with a test member and confirm only that member and staff can see the new channel
@@ -129,6 +142,6 @@ You should see logs confirming:
 4. As an administrator, run `/ticket setlog` and choose a private staff transcript channel
 5. Close the ticket and confirm its HTML transcript appears in the selected channel
 
-## 13. PostgreSQL note
+## 14. PostgreSQL note
 
-If `DATABASE_URL` is set, the bot stores moderation logs and persistent feature settings, including ticket configuration, in PostgreSQL. Suggestions, votes, and suggestion configuration are PostgreSQL-only. If the older database tables are empty, the bot imports existing local JSON data on startup. Without `DATABASE_URL`, the suggestion panel is unavailable and the bot falls back to local JSON files and in-memory modlogs for older features.
+If `DATABASE_URL` is set, the bot stores moderation logs and persistent feature settings, including ticket configuration, in PostgreSQL. Suggestions, votes, suggestion configuration, NE Coins, shop items, purchases, daily reward claims, and image URLs are PostgreSQL-only. If the older database tables are empty, the bot imports existing local JSON data on startup. Without `DATABASE_URL`, the suggestion panel and NE Coins/shop system are unavailable and the bot falls back to local JSON files and in-memory modlogs for older features.

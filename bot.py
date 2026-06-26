@@ -18,7 +18,7 @@ import discord
 import psycopg
 from discord import app_commands
 from discord.ext import commands, tasks
-from sqlalchemy import BigInteger, DateTime, ForeignKey, SmallInteger, String, Text, UniqueConstraint, func, select
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, SmallInteger, String, Text, UniqueConstraint, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -88,6 +88,11 @@ SUGGESTION_STATUS_COLORS = {
     SUGGESTION_STATUS_REJECTED: discord.Color.red(),
     SUGGESTION_STATUS_CONSIDERING: discord.Color.gold(),
 }
+CURRENCY_NAME = "NE Coins"
+CURRENCY_EMOJI = "\U0001fa99"
+DEFAULT_DAILY_REWARD_AMOUNT = 50
+DEFAULT_DAILY_REWARD_COOLDOWN_HOURS = 24
+SHOP_UNLIMITED_STOCK = -1
 AFK_DEFAULT_REASON = "AFK"
 AFK_REASON_LIMIT = 200
 AFK_MENTION_REPLY_LIMIT = 5
@@ -250,6 +255,97 @@ class SuggestionVoteRecord(SuggestionBase):
         onupdate=func.now(),
         nullable=False,
     )
+
+
+class EconomyConfigRecord(SuggestionBase):
+    __tablename__ = "economy_configs"
+
+    guild_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    coin_image_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    daily_amount: Mapped[int] = mapped_column(Integer, nullable=False, default=DEFAULT_DAILY_REWARD_AMOUNT)
+    daily_cooldown_hours: Mapped[int] = mapped_column(Integer, nullable=False, default=DEFAULT_DAILY_REWARD_COOLDOWN_HOURS)
+    updated_by: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+
+class EconomyBalanceRecord(SuggestionBase):
+    __tablename__ = "economy_balances"
+
+    guild_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    balance: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+
+class EconomyTransactionRecord(SuggestionBase):
+    __tablename__ = "economy_transactions"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    guild_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    actor_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    amount: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    balance_after: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    source: Mapped[str] = mapped_column(String(40), nullable=False)
+    reason: Mapped[str] = mapped_column(String(240), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class ShopItemRecord(SuggestionBase):
+    __tablename__ = "shop_items"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    guild_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    price: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    stock: Mapped[int] = mapped_column(Integer, nullable=False, default=SHOP_UNLIMITED_STOCK)
+    role_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    image_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    one_time: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_by: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+
+class ShopPurchaseRecord(SuggestionBase):
+    __tablename__ = "shop_purchases"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    guild_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    item_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("shop_items.id", ondelete="RESTRICT"), nullable=False, index=True)
+    item_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    price_each: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    total_price: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    fulfilled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class DailyRewardClaimRecord(SuggestionBase):
+    __tablename__ = "daily_reward_claims"
+
+    guild_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    last_claimed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 def utc_now() -> datetime:
@@ -1065,7 +1161,7 @@ class RhinoBot(commands.Bot):
     async def setup_hook(self) -> None:
         if self.uses_postgres:
             await asyncio.to_thread(self.ensure_postgres_schema)
-            await self.initialize_suggestion_database()
+            await self.initialize_async_feature_database()
         await self.load_prefix_data()
         await self.load_ticket_config_data()
         await self.load_autoreact_data()
@@ -1177,7 +1273,7 @@ class RhinoBot(commands.Bot):
         except Exception:
             LOGGER.exception("Failed to ensure PostgreSQL schema.")
 
-    async def initialize_suggestion_database(self) -> None:
+    async def initialize_async_feature_database(self) -> None:
         if not self.settings.database_url:
             return
 
@@ -1194,15 +1290,18 @@ class RhinoBot(commands.Bot):
             )
             async with self.suggestion_engine.begin() as conn:
                 await conn.run_sync(SuggestionBase.metadata.create_all)
-            LOGGER.info("Suggestion system PostgreSQL tables are ready.")
+            LOGGER.info("Async PostgreSQL feature tables are ready.")
         except Exception:
-            LOGGER.exception("Failed to initialize suggestion PostgreSQL tables.")
+            LOGGER.exception("Failed to initialize async PostgreSQL feature tables.")
             if self.suggestion_engine is not None:
                 await self.suggestion_engine.dispose()
             self.suggestion_engine = None
             self.suggestion_session_factory = None
 
     def suggestions_database_ready(self) -> bool:
+        return self.suggestion_session_factory is not None
+
+    def economy_database_ready(self) -> bool:
         return self.suggestion_session_factory is not None
 
     async def on_ready(self) -> None:
@@ -1620,6 +1719,15 @@ class RhinoBot(commands.Bot):
                 inline=False,
             )
             embed.add_field(
+                name="NE Coins & Shop",
+                value=(
+                    "`/coins balance`, `/coins leaderboard`, and `/rewards daily` for members\n"
+                    "`/coins give/remove/set/image`, `/rewards config`, and `/shop ...` for admins\n"
+                    "`/inventory` shows purchased rewards"
+                ),
+                inline=False,
+            )
+            embed.add_field(
                 name="Community",
                 value=(
                     "`/afk` set yourself as away until you send a message again\n"
@@ -1839,6 +1947,180 @@ class RhinoBot(commands.Bot):
         ) -> None:
             await self.handle_suggestion_panel(interaction, suggestions_channel, panel_channel)
 
+        coins = app_commands.Group(name="coins", description="Manage and view NE Coins")
+
+        @coins.command(name="balance", description="Check a member's NE Coins balance")
+        @app_commands.describe(user="Member to check")
+        async def coins_balance(
+            interaction: discord.Interaction,
+            user: Optional[discord.Member] = None,
+        ) -> None:
+            await self.handle_coins_balance(interaction, user)
+
+        @coins.command(name="give", description="Give NE Coins to a member")
+        @app_commands.describe(user="Member receiving coins", amount="Amount of NE Coins", reason="Audit reason")
+        async def coins_give(
+            interaction: discord.Interaction,
+            user: discord.Member,
+            amount: app_commands.Range[int, 1, 1_000_000_000],
+            reason: Optional[str] = None,
+        ) -> None:
+            await self.handle_coins_adjust(interaction, user, int(amount), reason or "Admin grant", source="admin_give")
+
+        @coins.command(name="remove", description="Remove NE Coins from a member")
+        @app_commands.describe(user="Member losing coins", amount="Amount of NE Coins", reason="Audit reason")
+        async def coins_remove(
+            interaction: discord.Interaction,
+            user: discord.Member,
+            amount: app_commands.Range[int, 1, 1_000_000_000],
+            reason: Optional[str] = None,
+        ) -> None:
+            await self.handle_coins_adjust(interaction, user, -int(amount), reason or "Admin removal", source="admin_remove")
+
+        @coins.command(name="set", description="Set a member's NE Coins balance")
+        @app_commands.describe(user="Member to update", amount="New NE Coins balance", reason="Audit reason")
+        async def coins_set(
+            interaction: discord.Interaction,
+            user: discord.Member,
+            amount: app_commands.Range[int, 0, 1_000_000_000],
+            reason: Optional[str] = None,
+        ) -> None:
+            await self.handle_coins_set(interaction, user, int(amount), reason or "Admin balance set")
+
+        @coins.command(name="image", description="Upload the NE Coins image")
+        @app_commands.describe(image="Image attachment to use for NE Coins embeds")
+        async def coins_image(interaction: discord.Interaction, image: discord.Attachment) -> None:
+            await self.handle_coins_image_upload(interaction, image)
+
+        @coins.command(name="clearimage", description="Remove the NE Coins image")
+        async def coins_clearimage(interaction: discord.Interaction) -> None:
+            await self.handle_coins_image_clear(interaction)
+
+        @coins.command(name="leaderboard", description="Show the NE Coins leaderboard")
+        async def coins_leaderboard(interaction: discord.Interaction) -> None:
+            await self.handle_coins_leaderboard(interaction)
+
+        rewards = app_commands.Group(name="rewards", description="Claim and configure NE Coins rewards")
+
+        @rewards.command(name="daily", description="Claim your daily NE Coins reward")
+        async def rewards_daily(interaction: discord.Interaction) -> None:
+            await self.handle_daily_reward(interaction)
+
+        @rewards.command(name="config", description="Configure the daily NE Coins reward")
+        @app_commands.describe(amount="Daily reward amount", cooldown_hours="Hours between claims")
+        async def rewards_config(
+            interaction: discord.Interaction,
+            amount: app_commands.Range[int, 1, 1_000_000],
+            cooldown_hours: app_commands.Range[int, 1, 168],
+        ) -> None:
+            await self.handle_daily_reward_config(interaction, int(amount), int(cooldown_hours))
+
+        shop = app_commands.Group(name="shop", description="Manage and buy shop rewards")
+
+        @shop.command(name="create", description="Create a shop item")
+        @app_commands.describe(
+            name="Item name",
+            price="Price in NE Coins",
+            description="Item description",
+            image="Optional uploaded item image",
+            role="Optional Discord role reward",
+            stock="-1 for unlimited stock",
+            one_time="Only allow each user to buy once",
+        )
+        async def shop_create(
+            interaction: discord.Interaction,
+            name: str,
+            price: app_commands.Range[int, 1, 1_000_000_000],
+            description: str,
+            image: Optional[discord.Attachment] = None,
+            role: Optional[discord.Role] = None,
+            stock: app_commands.Range[int, -1, 1_000_000] = SHOP_UNLIMITED_STOCK,
+            one_time: bool = False,
+        ) -> None:
+            await self.handle_shop_create(interaction, name, int(price), description, image, role, int(stock), one_time)
+
+        @shop.command(name="list", description="Show active shop items")
+        async def shop_list(interaction: discord.Interaction) -> None:
+            await self.handle_shop_list(interaction)
+
+        @shop.command(name="view", description="View a shop item")
+        @app_commands.describe(item_id="Shop item ID")
+        async def shop_view(interaction: discord.Interaction, item_id: int) -> None:
+            await self.handle_shop_view(interaction, item_id)
+
+        @shop.command(name="buy", description="Buy a shop item with NE Coins")
+        @app_commands.describe(item_id="Shop item ID", quantity="Quantity to buy")
+        async def shop_buy(
+            interaction: discord.Interaction,
+            item_id: int,
+            quantity: app_commands.Range[int, 1, 100] = 1,
+        ) -> None:
+            await self.handle_shop_buy(interaction, item_id, int(quantity))
+
+        @shop.command(name="edit", description="Edit a shop item")
+        @app_commands.describe(
+            item_id="Shop item ID",
+            name="New item name",
+            price="New price",
+            description="New description",
+            stock="-1 for unlimited stock",
+            active="Whether the item appears in the shop",
+            one_time="Only allow each user to buy once",
+        )
+        async def shop_edit(
+            interaction: discord.Interaction,
+            item_id: int,
+            name: Optional[str] = None,
+            price: Optional[int] = None,
+            description: Optional[str] = None,
+            stock: Optional[int] = None,
+            active: Optional[bool] = None,
+            one_time: Optional[bool] = None,
+        ) -> None:
+            await self.handle_shop_edit(
+                interaction,
+                item_id,
+                name=name,
+                price=int(price) if price is not None else None,
+                description=description,
+                stock=int(stock) if stock is not None else None,
+                active=active,
+                one_time=one_time,
+            )
+
+        @shop.command(name="image", description="Upload or replace a shop item image")
+        @app_commands.describe(item_id="Shop item ID", image="Uploaded item image")
+        async def shop_image(interaction: discord.Interaction, item_id: int, image: discord.Attachment) -> None:
+            await self.handle_shop_image_upload(interaction, item_id, image)
+
+        @shop.command(name="setrole", description="Set the role reward for a shop item")
+        @app_commands.describe(item_id="Shop item ID", role="Role granted when purchased")
+        async def shop_setrole(interaction: discord.Interaction, item_id: int, role: discord.Role) -> None:
+            await self.handle_shop_set_role(interaction, item_id, role)
+
+        @shop.command(name="removerole", description="Remove the role reward from a shop item")
+        @app_commands.describe(item_id="Shop item ID")
+        async def shop_removerole(interaction: discord.Interaction, item_id: int) -> None:
+            await self.handle_shop_remove_role(interaction, item_id)
+
+        @shop.command(name="delete", description="Archive a shop item")
+        @app_commands.describe(item_id="Shop item ID")
+        async def shop_delete(interaction: discord.Interaction, item_id: int) -> None:
+            await self.handle_shop_delete(interaction, item_id)
+
+        @shop.command(name="fulfill", description="Mark a manual reward purchase as fulfilled")
+        @app_commands.describe(purchase_id="Inventory purchase ID")
+        async def shop_fulfill(interaction: discord.Interaction, purchase_id: int) -> None:
+            await self.handle_shop_fulfill(interaction, purchase_id)
+
+        @tree.command(name="inventory", description="View purchased shop rewards")
+        @app_commands.describe(user="Member to inspect")
+        async def inventory(
+            interaction: discord.Interaction,
+            user: Optional[discord.Member] = None,
+        ) -> None:
+            await self.handle_inventory(interaction, user)
+
         serverinfo = app_commands.Group(
             name="serverinfo",
             description="Post modern server information panels",
@@ -2053,6 +2335,9 @@ class RhinoBot(commands.Bot):
 
         tree.add_command(anti_raid)
         tree.add_command(ticket)
+        tree.add_command(coins)
+        tree.add_command(rewards)
+        tree.add_command(shop)
         tree.add_command(autoreact)
         tree.add_command(reaction_role)
         tree.add_command(no_link)
@@ -2531,6 +2816,630 @@ class RhinoBot(commands.Bot):
             await session.commit()
             await session.refresh(suggestion)
             return suggestion, upvotes, downvotes
+
+    def economy_feature_ready_message(self) -> str:
+        return "NE Coins require PostgreSQL. Set `DATABASE_URL` on Railway and restart the bot."
+
+    def format_coins(self, amount: int) -> str:
+        return f"{CURRENCY_EMOJI} **{amount:,}** {CURRENCY_NAME}"
+
+    def format_stock(self, stock: int) -> str:
+        if stock == SHOP_UNLIMITED_STOCK:
+            return "Unlimited"
+        return f"{stock:,}"
+
+    async def get_or_create_economy_config(
+        self,
+        session: AsyncSession,
+        guild_id: int,
+        *,
+        updated_by: Optional[int] = None,
+    ) -> EconomyConfigRecord:
+        config = await session.get(EconomyConfigRecord, guild_id)
+        if config is None:
+            config = EconomyConfigRecord(
+                guild_id=guild_id,
+                daily_amount=DEFAULT_DAILY_REWARD_AMOUNT,
+                daily_cooldown_hours=DEFAULT_DAILY_REWARD_COOLDOWN_HOURS,
+                updated_by=updated_by,
+            )
+            session.add(config)
+            await session.flush()
+        return config
+
+    async def get_economy_config(self, guild_id: int) -> Optional[EconomyConfigRecord]:
+        if self.suggestion_session_factory is None:
+            return None
+
+        async with self.suggestion_session_factory() as session:
+            return await self.get_or_create_economy_config(session, guild_id)
+
+    async def get_coin_balance(self, guild_id: int, user_id: int) -> int:
+        if self.suggestion_session_factory is None:
+            return 0
+
+        async with self.suggestion_session_factory() as session:
+            record = await session.get(EconomyBalanceRecord, {"guild_id": guild_id, "user_id": user_id})
+            return int(record.balance) if record is not None else 0
+
+    async def get_or_create_balance_for_update(
+        self,
+        session: AsyncSession,
+        guild_id: int,
+        user_id: int,
+    ) -> EconomyBalanceRecord:
+        result = await session.execute(
+            select(EconomyBalanceRecord)
+            .where(EconomyBalanceRecord.guild_id == guild_id, EconomyBalanceRecord.user_id == user_id)
+            .with_for_update()
+        )
+        record = result.scalar_one_or_none()
+        if record is None:
+            record = EconomyBalanceRecord(guild_id=guild_id, user_id=user_id, balance=0)
+            session.add(record)
+            await session.flush()
+        return record
+
+    def add_coin_transaction(
+        self,
+        session: AsyncSession,
+        *,
+        guild_id: int,
+        user_id: int,
+        actor_id: Optional[int],
+        amount: int,
+        balance_after: int,
+        source: str,
+        reason: str,
+    ) -> None:
+        session.add(
+            EconomyTransactionRecord(
+                guild_id=guild_id,
+                user_id=user_id,
+                actor_id=actor_id,
+                amount=amount,
+                balance_after=balance_after,
+                source=truncate_text(source, 40),
+                reason=truncate_text(reason, 240),
+            )
+        )
+
+    async def change_coin_balance(
+        self,
+        guild_id: int,
+        user_id: int,
+        delta: int,
+        *,
+        actor_id: Optional[int],
+        source: str,
+        reason: str,
+        allow_negative: bool = False,
+    ) -> Tuple[bool, int, Optional[str]]:
+        if self.suggestion_session_factory is None:
+            return False, 0, self.economy_feature_ready_message()
+
+        async with self.suggestion_session_factory() as session:
+            async with session.begin():
+                record = await self.get_or_create_balance_for_update(session, guild_id, user_id)
+                new_balance = int(record.balance) + int(delta)
+                if new_balance < 0 and not allow_negative:
+                    return False, int(record.balance), "That member does not have enough NE Coins."
+                record.balance = new_balance
+                record.updated_at = utc_now()
+                self.add_coin_transaction(
+                    session,
+                    guild_id=guild_id,
+                    user_id=user_id,
+                    actor_id=actor_id,
+                    amount=int(delta),
+                    balance_after=new_balance,
+                    source=source,
+                    reason=reason,
+                )
+                return True, new_balance, None
+
+    async def set_coin_balance(
+        self,
+        guild_id: int,
+        user_id: int,
+        amount: int,
+        *,
+        actor_id: Optional[int],
+        source: str,
+        reason: str,
+    ) -> Tuple[int, int]:
+        if self.suggestion_session_factory is None:
+            raise RuntimeError("Economy database is not available.")
+
+        async with self.suggestion_session_factory() as session:
+            async with session.begin():
+                record = await self.get_or_create_balance_for_update(session, guild_id, user_id)
+                old_balance = int(record.balance)
+                record.balance = amount
+                record.updated_at = utc_now()
+                self.add_coin_transaction(
+                    session,
+                    guild_id=guild_id,
+                    user_id=user_id,
+                    actor_id=actor_id,
+                    amount=amount - old_balance,
+                    balance_after=amount,
+                    source=source,
+                    reason=reason,
+                )
+                return amount, amount - old_balance
+
+    async def set_coin_image_url(self, guild_id: int, image_url: Optional[str], actor_id: int) -> None:
+        if self.suggestion_session_factory is None:
+            raise RuntimeError("Economy database is not available.")
+
+        async with self.suggestion_session_factory() as session:
+            async with session.begin():
+                config = await self.get_or_create_economy_config(session, guild_id, updated_by=actor_id)
+                config.coin_image_url = image_url
+                config.updated_by = actor_id
+                config.updated_at = utc_now()
+
+    async def set_daily_reward_settings(
+        self,
+        guild_id: int,
+        amount: int,
+        cooldown_hours: int,
+        actor_id: int,
+    ) -> EconomyConfigRecord:
+        if self.suggestion_session_factory is None:
+            raise RuntimeError("Economy database is not available.")
+
+        async with self.suggestion_session_factory() as session:
+            async with session.begin():
+                config = await self.get_or_create_economy_config(session, guild_id, updated_by=actor_id)
+                config.daily_amount = amount
+                config.daily_cooldown_hours = cooldown_hours
+                config.updated_by = actor_id
+                config.updated_at = utc_now()
+            await session.refresh(config)
+            return config
+
+    async def claim_daily_reward(
+        self,
+        guild_id: int,
+        user_id: int,
+    ) -> Tuple[bool, int, int, Optional[datetime]]:
+        if self.suggestion_session_factory is None:
+            return False, 0, 0, None
+
+        now = utc_now()
+        async with self.suggestion_session_factory() as session:
+            async with session.begin():
+                config = await self.get_or_create_economy_config(session, guild_id)
+                claim = await session.get(DailyRewardClaimRecord, {"guild_id": guild_id, "user_id": user_id})
+                cooldown = timedelta(hours=int(config.daily_cooldown_hours))
+                if claim is not None:
+                    next_claim_at = claim.last_claimed_at + cooldown
+                    if next_claim_at > now:
+                        balance = await self.get_or_create_balance_for_update(session, guild_id, user_id)
+                        return False, int(balance.balance), int(config.daily_amount), next_claim_at
+
+                balance = await self.get_or_create_balance_for_update(session, guild_id, user_id)
+                balance.balance = int(balance.balance) + int(config.daily_amount)
+                balance.updated_at = now
+                if claim is None:
+                    session.add(DailyRewardClaimRecord(guild_id=guild_id, user_id=user_id, last_claimed_at=now))
+                else:
+                    claim.last_claimed_at = now
+                self.add_coin_transaction(
+                    session,
+                    guild_id=guild_id,
+                    user_id=user_id,
+                    actor_id=None,
+                    amount=int(config.daily_amount),
+                    balance_after=int(balance.balance),
+                    source="daily_reward",
+                    reason="Daily reward claim",
+                )
+                return True, int(balance.balance), int(config.daily_amount), now + cooldown
+
+    async def get_coin_leaderboard(self, guild_id: int, limit: int = 10) -> List[EconomyBalanceRecord]:
+        if self.suggestion_session_factory is None:
+            return []
+
+        async with self.suggestion_session_factory() as session:
+            result = await session.execute(
+                select(EconomyBalanceRecord)
+                .where(EconomyBalanceRecord.guild_id == guild_id, EconomyBalanceRecord.balance > 0)
+                .order_by(EconomyBalanceRecord.balance.desc(), EconomyBalanceRecord.updated_at.asc())
+                .limit(limit)
+            )
+            return list(result.scalars().all())
+
+    def apply_coin_image(self, embed: discord.Embed, config: Optional[EconomyConfigRecord]) -> None:
+        if config is not None and config.coin_image_url:
+            embed.set_thumbnail(url=config.coin_image_url)
+        else:
+            set_default_thumbnail(embed)
+
+    def create_balance_embed(
+        self,
+        user: discord.abc.User,
+        balance: int,
+        config: Optional[EconomyConfigRecord],
+    ) -> discord.Embed:
+        embed = make_embed(
+            f"{CURRENCY_NAME} Balance",
+            f"{user.mention} has {self.format_coins(balance)}.",
+            discord.Color.gold(),
+        )
+        self.apply_coin_image(embed, config)
+        return embed
+
+    def create_leaderboard_embed(
+        self,
+        guild: discord.Guild,
+        rows: List[EconomyBalanceRecord],
+        config: Optional[EconomyConfigRecord],
+    ) -> discord.Embed:
+        embed = make_embed(
+            f"{CURRENCY_NAME} Leaderboard",
+            f"Top balances in **{guild.name}**.",
+            discord.Color.gold(),
+        )
+        if rows:
+            lines = []
+            for index, row in enumerate(rows, start=1):
+                member = guild.get_member(row.user_id)
+                user_text = member.mention if member is not None else f"<@{row.user_id}>"
+                lines.append(f"`{index:02}` {user_text} - {row.balance:,} {CURRENCY_NAME}")
+            embed.add_field(name="Top Members", value="\n".join(lines), inline=False)
+        else:
+            embed.add_field(name="Top Members", value="No NE Coins have been earned yet.", inline=False)
+        self.apply_coin_image(embed, config)
+        return embed
+
+    def clean_shop_text(self, value: str, limit: int) -> str:
+        return truncate_text(re.sub(r"\s+", " ", value).strip(), limit)
+
+    def create_shop_item_embed(
+        self,
+        item: ShopItemRecord,
+        config: Optional[EconomyConfigRecord],
+    ) -> discord.Embed:
+        color = discord.Color.green() if item.active else discord.Color.dark_grey()
+        embed = discord.Embed(
+            title=f"Shop Item #{item.id}: {item.name}",
+            description=truncate_text(item.description, 3500),
+            color=color,
+            timestamp=getattr(item, "updated_at", None) or utc_now(),
+        )
+        embed.add_field(name="Price", value=self.format_coins(item.price), inline=True)
+        embed.add_field(name="Stock", value=self.format_stock(item.stock), inline=True)
+        embed.add_field(name="Status", value="Active" if item.active else "Archived", inline=True)
+        embed.add_field(name="Purchase Limit", value="One time" if item.one_time else "Repeatable", inline=True)
+        embed.add_field(
+            name="Reward",
+            value=f"Role: <@&{item.role_id}>" if item.role_id else "Manual staff fulfillment",
+            inline=True,
+        )
+        if item.image_url:
+            embed.set_image(url=item.image_url)
+        else:
+            self.apply_coin_image(embed, config)
+        embed.set_footer(text=f"Item ID: {item.id} | {BRAND_FOOTER}")
+        return embed
+
+    def create_shop_list_embed(
+        self,
+        items: List[ShopItemRecord],
+        config: Optional[EconomyConfigRecord],
+    ) -> discord.Embed:
+        embed = make_embed(
+            f"{CURRENCY_NAME} Shop",
+            "Use `/shop view item_id:<id>` for details or `/shop buy item_id:<id>` to purchase.",
+            discord.Color.blurple(),
+        )
+        if not items:
+            embed.add_field(name="Items", value="The shop does not have any active items yet.", inline=False)
+        else:
+            lines = []
+            for item in items:
+                stock = self.format_stock(item.stock)
+                reward = f"Role <@&{item.role_id}>" if item.role_id else "Manual reward"
+                lines.append(
+                    f"`#{item.id}` **{item.name}** - {item.price:,} {CURRENCY_NAME} | Stock: {stock} | {reward}"
+                )
+            embed.add_field(name="Items", value=truncate_text("\n".join(lines), 4000), inline=False)
+        self.apply_coin_image(embed, config)
+        return embed
+
+    async def create_shop_item(
+        self,
+        guild_id: int,
+        name: str,
+        price: int,
+        description: str,
+        image_url: Optional[str],
+        role_id: Optional[int],
+        stock: int,
+        one_time: bool,
+        created_by: int,
+    ) -> ShopItemRecord:
+        if self.suggestion_session_factory is None:
+            raise RuntimeError("Economy database is not available.")
+
+        item = ShopItemRecord(
+            guild_id=guild_id,
+            name=name,
+            description=description,
+            price=price,
+            stock=stock,
+            role_id=role_id,
+            image_url=image_url,
+            active=True,
+            one_time=one_time,
+            created_by=created_by,
+        )
+        async with self.suggestion_session_factory() as session:
+            session.add(item)
+            await session.commit()
+            await session.refresh(item)
+            return item
+
+    async def get_shop_item(
+        self,
+        guild_id: int,
+        item_id: int,
+    ) -> Optional[ShopItemRecord]:
+        if self.suggestion_session_factory is None:
+            return None
+
+        async with self.suggestion_session_factory() as session:
+            result = await session.execute(
+                select(ShopItemRecord).where(ShopItemRecord.guild_id == guild_id, ShopItemRecord.id == item_id)
+            )
+            return result.scalar_one_or_none()
+
+    async def list_shop_items(self, guild_id: int, *, active_only: bool = True, limit: int = 15) -> List[ShopItemRecord]:
+        if self.suggestion_session_factory is None:
+            return []
+
+        conditions = [ShopItemRecord.guild_id == guild_id]
+        if active_only:
+            conditions.append(ShopItemRecord.active.is_(True))
+
+        async with self.suggestion_session_factory() as session:
+            result = await session.execute(
+                select(ShopItemRecord)
+                .where(*conditions)
+                .order_by(ShopItemRecord.active.desc(), ShopItemRecord.id.asc())
+                .limit(limit)
+            )
+            return list(result.scalars().all())
+
+    async def update_shop_item(
+        self,
+        guild_id: int,
+        item_id: int,
+        **updates,
+    ) -> Optional[ShopItemRecord]:
+        if self.suggestion_session_factory is None:
+            return None
+
+        async with self.suggestion_session_factory() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(ShopItemRecord)
+                    .where(ShopItemRecord.guild_id == guild_id, ShopItemRecord.id == item_id)
+                    .with_for_update()
+                )
+                item = result.scalar_one_or_none()
+                if item is None:
+                    return None
+                for key, value in updates.items():
+                    setattr(item, key, value)
+                item.updated_at = utc_now()
+            await session.refresh(item)
+            return item
+
+    async def buy_shop_item_record(
+        self,
+        guild_id: int,
+        user_id: int,
+        item_id: int,
+        quantity: int,
+    ) -> Tuple[Optional[ShopPurchaseRecord], Optional[ShopItemRecord], int, Optional[str]]:
+        if self.suggestion_session_factory is None:
+            return None, None, 0, self.economy_feature_ready_message()
+
+        async with self.suggestion_session_factory() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(ShopItemRecord)
+                    .where(ShopItemRecord.guild_id == guild_id, ShopItemRecord.id == item_id)
+                    .with_for_update()
+                )
+                item = result.scalar_one_or_none()
+                if item is None or not item.active:
+                    return None, None, 0, "That shop item was not found or is archived."
+                if item.stock != SHOP_UNLIMITED_STOCK and item.stock < quantity:
+                    return None, item, 0, "That item does not have enough stock."
+                if item.one_time:
+                    existing_purchase = await session.execute(
+                        select(func.count(ShopPurchaseRecord.id)).where(
+                            ShopPurchaseRecord.guild_id == guild_id,
+                            ShopPurchaseRecord.user_id == user_id,
+                            ShopPurchaseRecord.item_id == item.id,
+                        )
+                    )
+                    if int(existing_purchase.scalar_one() or 0) > 0:
+                        return None, item, 0, "You have already purchased this one-time item."
+
+                total_price = int(item.price) * quantity
+                balance = await self.get_or_create_balance_for_update(session, guild_id, user_id)
+                if int(balance.balance) < total_price:
+                    return None, item, int(balance.balance), "You do not have enough NE Coins for that purchase."
+
+                balance.balance = int(balance.balance) - total_price
+                balance.updated_at = utc_now()
+                if item.stock != SHOP_UNLIMITED_STOCK:
+                    item.stock -= quantity
+                item.updated_at = utc_now()
+                purchase = ShopPurchaseRecord(
+                    guild_id=guild_id,
+                    user_id=user_id,
+                    item_id=item.id,
+                    item_name=item.name,
+                    price_each=int(item.price),
+                    quantity=quantity,
+                    total_price=total_price,
+                    fulfilled=False,
+                )
+                session.add(purchase)
+                self.add_coin_transaction(
+                    session,
+                    guild_id=guild_id,
+                    user_id=user_id,
+                    actor_id=None,
+                    amount=-total_price,
+                    balance_after=int(balance.balance),
+                    source="shop_purchase",
+                    reason=f"Purchased {quantity}x {item.name}",
+                )
+            await session.refresh(purchase)
+            await session.refresh(item)
+            return purchase, item, int(balance.balance), None
+
+    async def mark_purchase_fulfilled(self, guild_id: int, purchase_id: int) -> Optional[ShopPurchaseRecord]:
+        if self.suggestion_session_factory is None:
+            return None
+
+        async with self.suggestion_session_factory() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(ShopPurchaseRecord)
+                    .where(ShopPurchaseRecord.guild_id == guild_id, ShopPurchaseRecord.id == purchase_id)
+                    .with_for_update()
+                )
+                purchase = result.scalar_one_or_none()
+                if purchase is None:
+                    return None
+                purchase.fulfilled = True
+            await session.refresh(purchase)
+            return purchase
+
+    async def get_inventory_rows(
+        self,
+        guild_id: int,
+        user_id: int,
+        *,
+        limit: int = 10,
+    ) -> List[ShopPurchaseRecord]:
+        if self.suggestion_session_factory is None:
+            return []
+
+        async with self.suggestion_session_factory() as session:
+            result = await session.execute(
+                select(ShopPurchaseRecord)
+                .where(ShopPurchaseRecord.guild_id == guild_id, ShopPurchaseRecord.user_id == user_id)
+                .order_by(ShopPurchaseRecord.created_at.desc())
+                .limit(limit)
+            )
+            return list(result.scalars().all())
+
+    def create_inventory_embed(
+        self,
+        user: discord.abc.User,
+        rows: List[ShopPurchaseRecord],
+        config: Optional[EconomyConfigRecord],
+    ) -> discord.Embed:
+        embed = make_embed(
+            "Reward Inventory",
+            f"Recent shop purchases for {user.mention}.",
+            discord.Color.blurple(),
+        )
+        if not rows:
+            embed.add_field(name="Purchases", value="No shop rewards purchased yet.", inline=False)
+        else:
+            lines = []
+            for purchase in rows:
+                status = "Fulfilled" if purchase.fulfilled else "Pending"
+                lines.append(
+                    f"`#{purchase.id}` {purchase.quantity}x **{purchase.item_name}** - "
+                    f"{purchase.total_price:,} {CURRENCY_NAME} | {status}"
+                )
+            embed.add_field(name="Purchases", value=truncate_text("\n".join(lines), 4000), inline=False)
+        self.apply_coin_image(embed, config)
+        return embed
+
+    def sanitize_asset_filename(self, filename: str) -> str:
+        suffix = Path(filename).suffix.lower()
+        if suffix not in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}:
+            suffix = ".png"
+        stem = slugify_text(Path(filename).stem) or "asset"
+        return f"{stem[:80]}{suffix}"
+
+    async def get_asset_channel(self, guild: discord.Guild) -> Optional[discord.TextChannel]:
+        if not self.settings.asset_channel_id:
+            return None
+
+        channel = guild.get_channel(self.settings.asset_channel_id) or self.get_channel(self.settings.asset_channel_id)
+        if channel is None:
+            try:
+                channel = await self.fetch_channel(self.settings.asset_channel_id)
+            except discord.HTTPException:
+                LOGGER.exception("Could not fetch asset channel %s", self.settings.asset_channel_id)
+                return None
+        if isinstance(channel, discord.TextChannel) and channel.guild.id == guild.id:
+            return channel
+        LOGGER.warning("Configured ASSET_CHANNEL_ID is not a text channel in guild %s", guild.id)
+        return None
+
+    async def store_uploaded_image(
+        self,
+        interaction: discord.Interaction,
+        image: discord.Attachment,
+        label: str,
+    ) -> Tuple[Optional[str], Optional[str]]:
+        if interaction.guild is None:
+            return None, "Images can only be uploaded inside a server."
+        if not self.is_image_attachment(image):
+            return None, "Please upload an image file."
+
+        asset_channel = await self.get_asset_channel(interaction.guild)
+        if asset_channel is None:
+            return image.url, "Set `ASSET_CHANNEL_ID` to mirror uploads into a private asset channel."
+
+        bot_member = interaction.guild.me
+        if bot_member is None and self.user is not None:
+            bot_member = interaction.guild.get_member(self.user.id)
+        if bot_member is None:
+            return None, "I could not verify my asset-channel permissions."
+
+        missing = self.channel_missing_permissions(
+            asset_channel,
+            bot_member,
+            (
+                ("view_channel", "View Channel"),
+                ("send_messages", "Send Messages"),
+                ("attach_files", "Attach Files"),
+            ),
+        )
+        if missing:
+            return None, f"I need {', '.join(missing)} in {asset_channel.mention} to store uploaded images."
+
+        try:
+            payload = await image.read(use_cached=True)
+            file = discord.File(io.BytesIO(payload), filename=self.sanitize_asset_filename(image.filename))
+            message = await asset_channel.send(
+                content=f"{label} uploaded by {interaction.user} (`{interaction.user.id}`).",
+                file=file,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except discord.HTTPException:
+            LOGGER.exception("Failed to mirror uploaded asset %s", image.filename)
+            return None, "I could not store that image in the asset channel."
+
+        if not message.attachments:
+            return None, "The image upload did not return an attachment URL."
+        return message.attachments[0].url, None
 
     def find_text_channel_by_name(self, guild: discord.Guild, channel_name: str) -> Optional[discord.TextChannel]:
         normalized_target = channel_name.strip().lower().lstrip("#")
@@ -7567,6 +8476,716 @@ class RhinoBot(commands.Bot):
             ephemeral=True,
         )
 
+    async def ensure_economy_ready(self, interaction: discord.Interaction) -> bool:
+        if interaction.guild is None:
+            await self.send_interaction_message(interaction, "This command can only be used inside a server.", ephemeral=True)
+            return False
+        if not self.economy_database_ready():
+            await self.send_interaction_message(interaction, self.economy_feature_ready_message(), ephemeral=True)
+            return False
+        return True
+
+    async def ensure_economy_admin(self, interaction: discord.Interaction) -> bool:
+        if not await self.ensure_economy_ready(interaction):
+            return False
+        if not isinstance(interaction.user, discord.Member) or not self.has_admin_access(interaction.user):
+            await self.send_interaction_message(interaction, NO_PERMISSION, ephemeral=True)
+            return False
+        return True
+
+    async def handle_coins_balance(
+        self,
+        interaction: discord.Interaction,
+        user: Optional[discord.Member],
+    ) -> None:
+        if not await self.ensure_economy_ready(interaction):
+            return
+        if interaction.guild is None:
+            return
+
+        target = user or interaction.user
+        if not await self.defer_interaction_once(interaction, ephemeral=True, thinking=True):
+            return
+
+        try:
+            balance = await self.get_coin_balance(interaction.guild.id, target.id)
+            config = await self.get_economy_config(interaction.guild.id)
+        except Exception:
+            LOGGER.exception("Failed to load NE Coins balance for %s", target.id)
+            await self.send_interaction_message(interaction, "I could not load that NE Coins balance right now.", ephemeral=True)
+            return
+
+        await self.send_interaction_message(
+            interaction,
+            embed=self.create_balance_embed(target, balance, config),
+            ephemeral=True,
+        )
+
+    async def handle_coins_adjust(
+        self,
+        interaction: discord.Interaction,
+        user: discord.Member,
+        delta: int,
+        reason: str,
+        *,
+        source: str,
+    ) -> None:
+        if not await self.ensure_economy_admin(interaction):
+            return
+        if interaction.guild is None:
+            return
+        if user.bot:
+            await self.send_interaction_message(interaction, "Bots cannot hold NE Coins.", ephemeral=True)
+            return
+
+        if not await self.defer_interaction_once(interaction, ephemeral=True, thinking=True):
+            return
+
+        try:
+            success, balance, error = await self.change_coin_balance(
+                interaction.guild.id,
+                user.id,
+                delta,
+                actor_id=interaction.user.id,
+                source=source,
+                reason=reason,
+            )
+        except Exception:
+            LOGGER.exception("Failed to adjust NE Coins balance for %s", user.id)
+            await self.send_interaction_message(interaction, "I could not update that NE Coins balance right now.", ephemeral=True)
+            return
+        if not success:
+            await self.send_interaction_message(interaction, error or "I could not update that balance.", ephemeral=True)
+            return
+
+        action = "Added" if delta > 0 else "Removed"
+        await self.send_interaction_message(
+            interaction,
+            f"{action} {self.format_coins(abs(delta))} {'to' if delta > 0 else 'from'} {user.mention}. New balance: {balance:,} {CURRENCY_NAME}.",
+            ephemeral=True,
+        )
+
+    async def handle_coins_set(
+        self,
+        interaction: discord.Interaction,
+        user: discord.Member,
+        amount: int,
+        reason: str,
+    ) -> None:
+        if not await self.ensure_economy_admin(interaction):
+            return
+        if interaction.guild is None:
+            return
+        if user.bot:
+            await self.send_interaction_message(interaction, "Bots cannot hold NE Coins.", ephemeral=True)
+            return
+
+        if not await self.defer_interaction_once(interaction, ephemeral=True, thinking=True):
+            return
+
+        try:
+            balance, delta = await self.set_coin_balance(
+                interaction.guild.id,
+                user.id,
+                amount,
+                actor_id=interaction.user.id,
+                source="admin_set",
+                reason=reason,
+            )
+        except Exception:
+            LOGGER.exception("Failed to set NE Coins balance for %s", user.id)
+            await self.send_interaction_message(interaction, "I could not set that NE Coins balance right now.", ephemeral=True)
+            return
+
+        await self.send_interaction_message(
+            interaction,
+            f"Set {user.mention}'s balance to {balance:,} {CURRENCY_NAME} ({delta:+,}).",
+            ephemeral=True,
+        )
+
+    async def handle_coins_image_upload(self, interaction: discord.Interaction, image: discord.Attachment) -> None:
+        if not await self.ensure_economy_admin(interaction):
+            return
+        if interaction.guild is None:
+            return
+
+        if not await self.defer_interaction_once(interaction, ephemeral=True, thinking=True):
+            return
+
+        image_url, warning = await self.store_uploaded_image(interaction, image, "NE Coins image")
+        if image_url is None:
+            await self.send_interaction_message(interaction, warning or "I could not store that image.", ephemeral=True)
+            return
+
+        try:
+            await self.set_coin_image_url(interaction.guild.id, image_url, interaction.user.id)
+        except Exception:
+            LOGGER.exception("Failed to save NE Coins image for guild %s", interaction.guild.id)
+            await self.send_interaction_message(interaction, "I stored the image but could not save it in PostgreSQL.", ephemeral=True)
+            return
+
+        message = "NE Coins image updated."
+        if warning:
+            message += f" {warning}"
+        await self.send_interaction_message(interaction, message, ephemeral=True)
+
+    async def handle_coins_image_clear(self, interaction: discord.Interaction) -> None:
+        if not await self.ensure_economy_admin(interaction):
+            return
+        if interaction.guild is None:
+            return
+
+        try:
+            await self.set_coin_image_url(interaction.guild.id, None, interaction.user.id)
+        except Exception:
+            LOGGER.exception("Failed to clear NE Coins image for guild %s", interaction.guild.id)
+            await self.send_interaction_message(interaction, "I could not clear the NE Coins image right now.", ephemeral=True)
+            return
+        await self.send_interaction_message(interaction, "NE Coins image cleared.", ephemeral=True)
+
+    async def handle_coins_leaderboard(self, interaction: discord.Interaction) -> None:
+        if not await self.ensure_economy_ready(interaction):
+            return
+        if interaction.guild is None:
+            return
+
+        if not await self.defer_interaction_once(interaction, ephemeral=False, thinking=True):
+            return
+
+        try:
+            rows = await self.get_coin_leaderboard(interaction.guild.id)
+            config = await self.get_economy_config(interaction.guild.id)
+        except Exception:
+            LOGGER.exception("Failed to load NE Coins leaderboard for guild %s", interaction.guild.id)
+            await self.send_interaction_message(interaction, "I could not load the leaderboard right now.", ephemeral=True)
+            return
+
+        await self.send_interaction_message(
+            interaction,
+            embed=self.create_leaderboard_embed(interaction.guild, rows, config),
+            ephemeral=False,
+        )
+
+    async def handle_daily_reward(self, interaction: discord.Interaction) -> None:
+        if not await self.ensure_economy_ready(interaction):
+            return
+        if interaction.guild is None:
+            return
+        if interaction.user.bot:
+            await self.send_interaction_message(interaction, "Bots cannot claim NE Coins.", ephemeral=True)
+            return
+
+        if not await self.defer_interaction_once(interaction, ephemeral=True, thinking=True):
+            return
+
+        try:
+            claimed, balance, amount, next_claim_at = await self.claim_daily_reward(interaction.guild.id, interaction.user.id)
+            config = await self.get_economy_config(interaction.guild.id)
+        except Exception:
+            LOGGER.exception("Failed to claim daily reward for %s", interaction.user.id)
+            await self.send_interaction_message(interaction, "I could not process your daily reward right now.", ephemeral=True)
+            return
+
+        if not claimed:
+            retry = discord.utils.format_dt(next_claim_at, "R") if next_claim_at is not None else "later"
+            await self.send_interaction_message(
+                interaction,
+                f"You already claimed your daily reward. Try again {retry}. Current balance: {balance:,} {CURRENCY_NAME}.",
+                ephemeral=True,
+            )
+            return
+
+        embed = make_embed(
+            "Daily Reward Claimed",
+            f"You received {self.format_coins(amount)}.\nNew balance: **{balance:,}** {CURRENCY_NAME}.",
+            discord.Color.gold(),
+        )
+        if next_claim_at is not None:
+            embed.add_field(name="Next Claim", value=discord.utils.format_dt(next_claim_at, "R"), inline=False)
+        self.apply_coin_image(embed, config)
+        await self.send_interaction_message(interaction, embed=embed, ephemeral=True)
+
+    async def handle_daily_reward_config(
+        self,
+        interaction: discord.Interaction,
+        amount: int,
+        cooldown_hours: int,
+    ) -> None:
+        if not await self.ensure_economy_admin(interaction):
+            return
+        if interaction.guild is None:
+            return
+
+        try:
+            config = await self.set_daily_reward_settings(interaction.guild.id, amount, cooldown_hours, interaction.user.id)
+        except Exception:
+            LOGGER.exception("Failed to update daily reward config for guild %s", interaction.guild.id)
+            await self.send_interaction_message(interaction, "I could not update the daily reward settings right now.", ephemeral=True)
+            return
+
+        await self.send_interaction_message(
+            interaction,
+            f"Daily reward set to {config.daily_amount:,} {CURRENCY_NAME} every {config.daily_cooldown_hours} hour(s).",
+            ephemeral=True,
+        )
+
+    def validate_shop_role_reward(
+        self,
+        guild: discord.Guild,
+        actor: discord.Member,
+        role: discord.Role,
+    ) -> Optional[str]:
+        actor_error = self.can_manage_role(actor, role)
+        if actor_error is not None:
+            return actor_error
+        bot_error = self.can_bot_grant_role(guild, role)
+        if bot_error is not None:
+            return bot_error
+        return None
+
+    def can_bot_grant_role(self, guild: discord.Guild, role: discord.Role) -> Optional[str]:
+        if role == guild.default_role:
+            return "The shop cannot grant the default @everyone role."
+        if role.managed:
+            return "That role is managed by an integration and cannot be granted manually."
+        bot_member = guild.me
+        if bot_member is None and self.user is not None:
+            bot_member = guild.get_member(self.user.id)
+        if bot_member is None:
+            return "I could not verify my role permissions right now."
+        if role >= bot_member.top_role:
+            return "I cannot grant that role because it is higher than or equal to my top role."
+        return None
+
+    async def handle_shop_create(
+        self,
+        interaction: discord.Interaction,
+        name: str,
+        price: int,
+        description: str,
+        image: Optional[discord.Attachment],
+        role: Optional[discord.Role],
+        stock: int,
+        one_time: bool,
+    ) -> None:
+        if not await self.ensure_economy_admin(interaction):
+            return
+        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+            return
+        if price <= 0 or stock < SHOP_UNLIMITED_STOCK:
+            await self.send_interaction_message(interaction, "Use a positive price and stock `-1` or higher.", ephemeral=True)
+            return
+        if role is not None:
+            role_error = self.validate_shop_role_reward(interaction.guild, interaction.user, role)
+            if role_error is not None:
+                await self.send_interaction_message(interaction, role_error, ephemeral=True)
+                return
+
+        clean_name = self.clean_shop_text(name, 100)
+        clean_description = truncate_text(description.strip(), 1800)
+        if not clean_name or not clean_description:
+            await self.send_interaction_message(interaction, "Shop items need a name and description.", ephemeral=True)
+            return
+
+        if not await self.defer_interaction_once(interaction, ephemeral=True, thinking=True):
+            return
+
+        image_url: Optional[str] = None
+        image_note: Optional[str] = None
+        if image is not None:
+            image_url, image_note = await self.store_uploaded_image(interaction, image, f"Shop item image: {clean_name}")
+            if image_url is None:
+                await self.send_interaction_message(interaction, image_note or "I could not store that item image.", ephemeral=True)
+                return
+
+        try:
+            item = await self.create_shop_item(
+                interaction.guild.id,
+                clean_name,
+                price,
+                clean_description,
+                image_url,
+                role.id if role is not None else None,
+                stock,
+                one_time,
+                interaction.user.id,
+            )
+            config = await self.get_economy_config(interaction.guild.id)
+        except Exception:
+            LOGGER.exception("Failed to create shop item in guild %s", interaction.guild.id)
+            await self.send_interaction_message(interaction, "I could not create that shop item right now.", ephemeral=True)
+            return
+
+        content = f"Shop item `#{item.id}` created."
+        if image_note:
+            content += f" {image_note}"
+        await self.send_interaction_message(
+            interaction,
+            content,
+            embed=self.create_shop_item_embed(item, config),
+            ephemeral=True,
+        )
+
+    async def handle_shop_list(self, interaction: discord.Interaction) -> None:
+        if not await self.ensure_economy_ready(interaction):
+            return
+        if interaction.guild is None:
+            return
+
+        if not await self.defer_interaction_once(interaction, ephemeral=False, thinking=True):
+            return
+
+        try:
+            items = await self.list_shop_items(interaction.guild.id)
+            config = await self.get_economy_config(interaction.guild.id)
+        except Exception:
+            LOGGER.exception("Failed to list shop items for guild %s", interaction.guild.id)
+            await self.send_interaction_message(interaction, "I could not load the shop right now.", ephemeral=True)
+            return
+
+        await self.send_interaction_message(interaction, embed=self.create_shop_list_embed(items, config), ephemeral=False)
+
+    async def handle_shop_view(self, interaction: discord.Interaction, item_id: int) -> None:
+        if not await self.ensure_economy_ready(interaction):
+            return
+        if interaction.guild is None:
+            return
+
+        try:
+            item = await self.get_shop_item(interaction.guild.id, item_id)
+            config = await self.get_economy_config(interaction.guild.id)
+        except Exception:
+            LOGGER.exception("Failed to load shop item %s", item_id)
+            await self.send_interaction_message(interaction, "I could not load that shop item right now.", ephemeral=True)
+            return
+        if item is None:
+            await self.send_interaction_message(interaction, "That shop item was not found.", ephemeral=True)
+            return
+
+        await self.send_interaction_message(interaction, embed=self.create_shop_item_embed(item, config), ephemeral=True)
+
+    async def handle_shop_edit(
+        self,
+        interaction: discord.Interaction,
+        item_id: int,
+        *,
+        name: Optional[str],
+        price: Optional[int],
+        description: Optional[str],
+        stock: Optional[int],
+        active: Optional[bool],
+        one_time: Optional[bool],
+    ) -> None:
+        if not await self.ensure_economy_admin(interaction):
+            return
+        if interaction.guild is None:
+            return
+
+        updates = {}
+        if name is not None:
+            clean_name = self.clean_shop_text(name, 100)
+            if not clean_name:
+                await self.send_interaction_message(interaction, "Item name cannot be blank.", ephemeral=True)
+                return
+            updates["name"] = clean_name
+        if description is not None:
+            clean_description = truncate_text(description.strip(), 1800)
+            if not clean_description:
+                await self.send_interaction_message(interaction, "Item description cannot be blank.", ephemeral=True)
+                return
+            updates["description"] = clean_description
+        if price is not None:
+            if price <= 0:
+                await self.send_interaction_message(interaction, "Price must be positive.", ephemeral=True)
+                return
+            updates["price"] = price
+        if stock is not None:
+            if stock < SHOP_UNLIMITED_STOCK:
+                await self.send_interaction_message(interaction, "Stock must be `-1` for unlimited or zero and above.", ephemeral=True)
+                return
+            updates["stock"] = stock
+        if active is not None:
+            updates["active"] = active
+        if one_time is not None:
+            updates["one_time"] = one_time
+        if not updates:
+            await self.send_interaction_message(interaction, "Provide at least one field to update.", ephemeral=True)
+            return
+
+        try:
+            item = await self.update_shop_item(interaction.guild.id, item_id, **updates)
+            config = await self.get_economy_config(interaction.guild.id)
+        except Exception:
+            LOGGER.exception("Failed to edit shop item %s", item_id)
+            await self.send_interaction_message(interaction, "I could not edit that shop item right now.", ephemeral=True)
+            return
+        if item is None:
+            await self.send_interaction_message(interaction, "That shop item was not found.", ephemeral=True)
+            return
+
+        await self.send_interaction_message(
+            interaction,
+            f"Shop item `#{item.id}` updated.",
+            embed=self.create_shop_item_embed(item, config),
+            ephemeral=True,
+        )
+
+    async def handle_shop_image_upload(
+        self,
+        interaction: discord.Interaction,
+        item_id: int,
+        image: discord.Attachment,
+    ) -> None:
+        if not await self.ensure_economy_admin(interaction):
+            return
+        if interaction.guild is None:
+            return
+
+        if not await self.defer_interaction_once(interaction, ephemeral=True, thinking=True):
+            return
+
+        try:
+            item = await self.get_shop_item(interaction.guild.id, item_id)
+        except Exception:
+            LOGGER.exception("Failed to load shop item %s before image update", item_id)
+            await self.send_interaction_message(interaction, "I could not load that shop item right now.", ephemeral=True)
+            return
+        if item is None:
+            await self.send_interaction_message(interaction, "That shop item was not found.", ephemeral=True)
+            return
+
+        image_url, warning = await self.store_uploaded_image(interaction, image, f"Shop item image: {item.name}")
+        if image_url is None:
+            await self.send_interaction_message(interaction, warning or "I could not store that item image.", ephemeral=True)
+            return
+
+        try:
+            updated = await self.update_shop_item(interaction.guild.id, item_id, image_url=image_url)
+            config = await self.get_economy_config(interaction.guild.id)
+        except Exception:
+            LOGGER.exception("Failed to update image for shop item %s", item_id)
+            await self.send_interaction_message(interaction, "I stored the image but could not save it in PostgreSQL.", ephemeral=True)
+            return
+        if updated is None:
+            await self.send_interaction_message(interaction, "That shop item was not found.", ephemeral=True)
+            return
+
+        content = f"Image updated for shop item `#{updated.id}`."
+        if warning:
+            content += f" {warning}"
+        await self.send_interaction_message(
+            interaction,
+            content,
+            embed=self.create_shop_item_embed(updated, config),
+            ephemeral=True,
+        )
+
+    async def handle_shop_set_role(self, interaction: discord.Interaction, item_id: int, role: discord.Role) -> None:
+        if not await self.ensure_economy_admin(interaction):
+            return
+        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+            return
+        role_error = self.validate_shop_role_reward(interaction.guild, interaction.user, role)
+        if role_error is not None:
+            await self.send_interaction_message(interaction, role_error, ephemeral=True)
+            return
+
+        try:
+            item = await self.update_shop_item(interaction.guild.id, item_id, role_id=role.id)
+            config = await self.get_economy_config(interaction.guild.id)
+        except Exception:
+            LOGGER.exception("Failed to set shop role for item %s", item_id)
+            await self.send_interaction_message(interaction, "I could not update that role reward right now.", ephemeral=True)
+            return
+        if item is None:
+            await self.send_interaction_message(interaction, "That shop item was not found.", ephemeral=True)
+            return
+
+        await self.send_interaction_message(
+            interaction,
+            f"Role reward set to {role.mention} for item `#{item.id}`.",
+            embed=self.create_shop_item_embed(item, config),
+            ephemeral=True,
+        )
+
+    async def handle_shop_remove_role(self, interaction: discord.Interaction, item_id: int) -> None:
+        if not await self.ensure_economy_admin(interaction):
+            return
+        if interaction.guild is None:
+            return
+
+        try:
+            item = await self.update_shop_item(interaction.guild.id, item_id, role_id=None)
+            config = await self.get_economy_config(interaction.guild.id)
+        except Exception:
+            LOGGER.exception("Failed to remove shop role for item %s", item_id)
+            await self.send_interaction_message(interaction, "I could not remove that role reward right now.", ephemeral=True)
+            return
+        if item is None:
+            await self.send_interaction_message(interaction, "That shop item was not found.", ephemeral=True)
+            return
+
+        await self.send_interaction_message(
+            interaction,
+            f"Role reward removed from item `#{item.id}`.",
+            embed=self.create_shop_item_embed(item, config),
+            ephemeral=True,
+        )
+
+    async def handle_shop_delete(self, interaction: discord.Interaction, item_id: int) -> None:
+        if not await self.ensure_economy_admin(interaction):
+            return
+        if interaction.guild is None:
+            return
+
+        try:
+            item = await self.update_shop_item(interaction.guild.id, item_id, active=False)
+        except Exception:
+            LOGGER.exception("Failed to archive shop item %s", item_id)
+            await self.send_interaction_message(interaction, "I could not archive that shop item right now.", ephemeral=True)
+            return
+        if item is None:
+            await self.send_interaction_message(interaction, "That shop item was not found.", ephemeral=True)
+            return
+
+        await self.send_interaction_message(interaction, f"Shop item `#{item.id}` archived.", ephemeral=True)
+
+    async def handle_shop_buy(self, interaction: discord.Interaction, item_id: int, quantity: int) -> None:
+        if not await self.ensure_economy_ready(interaction):
+            return
+        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+            await self.send_interaction_message(interaction, "Shop purchases can only be made by server members.", ephemeral=True)
+            return
+        if interaction.user.bot:
+            await self.send_interaction_message(interaction, "Bots cannot buy shop rewards.", ephemeral=True)
+            return
+
+        if not await self.defer_interaction_once(interaction, ephemeral=True, thinking=True):
+            return
+
+        try:
+            item = await self.get_shop_item(interaction.guild.id, item_id)
+        except Exception:
+            LOGGER.exception("Failed to load shop item %s before purchase", item_id)
+            await self.send_interaction_message(interaction, "I could not load that shop item right now.", ephemeral=True)
+            return
+        if item is None or not item.active:
+            await self.send_interaction_message(interaction, "That shop item was not found or is archived.", ephemeral=True)
+            return
+        role: Optional[discord.Role] = None
+        if item.role_id:
+            role = interaction.guild.get_role(item.role_id)
+            if role is None:
+                await self.send_interaction_message(interaction, "That item's role reward no longer exists. Ask staff to update it.", ephemeral=True)
+                return
+            if role in interaction.user.roles:
+                await self.send_interaction_message(interaction, f"You already have {role.mention}.", ephemeral=True)
+                return
+            role_error = self.can_bot_grant_role(interaction.guild, role)
+            if role_error is not None:
+                await self.send_interaction_message(interaction, role_error, ephemeral=True)
+                return
+
+        try:
+            purchase, purchased_item, balance, error = await self.buy_shop_item_record(
+                interaction.guild.id,
+                interaction.user.id,
+                item_id,
+                quantity,
+            )
+            config = await self.get_economy_config(interaction.guild.id)
+        except Exception:
+            LOGGER.exception("Failed to buy shop item %s for user %s", item_id, interaction.user.id)
+            await self.send_interaction_message(interaction, "I could not complete that purchase right now.", ephemeral=True)
+            return
+
+        if purchase is None or purchased_item is None:
+            await self.send_interaction_message(interaction, error or "I could not complete that purchase.", ephemeral=True)
+            return
+
+        fulfillment_note = "Staff will fulfill this reward manually."
+        if role is not None:
+            try:
+                await interaction.user.add_roles(role, reason=f"Shop purchase #{purchase.id}")
+                await self.mark_purchase_fulfilled(interaction.guild.id, purchase.id)
+                purchase.fulfilled = True
+                fulfillment_note = f"You received {role.mention}."
+            except discord.HTTPException:
+                LOGGER.exception("Failed to grant shop role %s for purchase %s", role.id, purchase.id)
+                fulfillment_note = f"Purchase saved, but I could not grant {role.mention}. Staff can fulfill it manually."
+
+        embed = make_embed(
+            "Purchase Complete",
+            (
+                f"You bought **{purchase.quantity}x {purchase.item_name}** for "
+                f"{purchase.total_price:,} {CURRENCY_NAME}.\n"
+                f"Remaining balance: **{balance:,}** {CURRENCY_NAME}.\n\n"
+                f"{fulfillment_note}"
+            ),
+            discord.Color.green(),
+        )
+        if purchased_item.image_url:
+            embed.set_image(url=purchased_item.image_url)
+        else:
+            self.apply_coin_image(embed, config)
+        embed.set_footer(text=f"Purchase ID: {purchase.id} | {BRAND_FOOTER}")
+        await self.send_interaction_message(interaction, embed=embed, ephemeral=True)
+
+    async def handle_shop_fulfill(self, interaction: discord.Interaction, purchase_id: int) -> None:
+        if not await self.ensure_economy_admin(interaction):
+            return
+        if interaction.guild is None:
+            return
+
+        try:
+            purchase = await self.mark_purchase_fulfilled(interaction.guild.id, purchase_id)
+        except Exception:
+            LOGGER.exception("Failed to fulfill purchase %s", purchase_id)
+            await self.send_interaction_message(interaction, "I could not mark that purchase fulfilled right now.", ephemeral=True)
+            return
+        if purchase is None:
+            await self.send_interaction_message(interaction, "That purchase was not found.", ephemeral=True)
+            return
+
+        await self.send_interaction_message(
+            interaction,
+            f"Purchase `#{purchase.id}` for <@{purchase.user_id}> marked fulfilled.",
+            ephemeral=True,
+        )
+
+    async def handle_inventory(
+        self,
+        interaction: discord.Interaction,
+        user: Optional[discord.Member],
+    ) -> None:
+        if not await self.ensure_economy_ready(interaction):
+            return
+        if interaction.guild is None:
+            return
+
+        target = user or interaction.user
+        if target.id != interaction.user.id:
+            if not isinstance(interaction.user, discord.Member) or not self.has_staff_access(interaction.user, "manage_messages"):
+                await self.send_interaction_message(interaction, NO_PERMISSION, ephemeral=True)
+                return
+
+        if not await self.defer_interaction_once(interaction, ephemeral=True, thinking=True):
+            return
+
+        try:
+            rows = await self.get_inventory_rows(interaction.guild.id, target.id)
+            config = await self.get_economy_config(interaction.guild.id)
+        except Exception:
+            LOGGER.exception("Failed to load inventory for user %s", target.id)
+            await self.send_interaction_message(interaction, "I could not load that inventory right now.", ephemeral=True)
+            return
+
+        await self.send_interaction_message(
+            interaction,
+            embed=self.create_inventory_embed(target, rows, config),
+            ephemeral=True,
+        )
+
     async def handle_verification_button(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None or not isinstance(interaction.user, discord.Member):
             await self.send_interaction_message(
@@ -8437,6 +10056,20 @@ Opened: {html.escape(opened_at)} • Exported: {utc_now().strftime('%Y-%m-%d %H:
                 LOGGER.exception("Could not fetch welcome channel %s", self.settings.welcome_channel_id)
         else:
             LOGGER.info("WELCOME_CHANNEL_ID not set. Automatic welcome messages are disabled.")
+
+        if self.settings.asset_channel_id:
+            try:
+                asset_channel = self.get_channel(self.settings.asset_channel_id) or await self.fetch_channel(
+                    self.settings.asset_channel_id
+                )
+                if isinstance(asset_channel, discord.TextChannel):
+                    LOGGER.info("Asset channel found: %s (%s)", asset_channel.name, asset_channel.id)
+                else:
+                    LOGGER.warning("ASSET_CHANNEL_ID is not a text channel: %s", self.settings.asset_channel_id)
+            except discord.HTTPException:
+                LOGGER.exception("Could not fetch asset channel %s", self.settings.asset_channel_id)
+        else:
+            LOGGER.info("ASSET_CHANNEL_ID not set. Uploaded economy images will use the original attachment URL.")
 
         try:
             application_channel = self.get_channel(self.settings.staff_application_channel_id) or await self.fetch_channel(

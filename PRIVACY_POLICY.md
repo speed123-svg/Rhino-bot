@@ -2,7 +2,7 @@
 
 Last updated: June 19, 2026
 
-This Privacy Policy explains how Rhino Bot ("the Bot") processes information when it is used in Discord servers for Northeast Esports community management, moderation, verification, modmail, support tickets, server utilities, and related Discord server features.
+This Privacy Policy explains how Rhino Bot ("the Bot") processes information when it is used in Discord servers for Northeast Esports community management, moderation, verification, modmail, support tickets, suggestions, NE Coins, shop rewards, server utilities, and related Discord server features.
 
 The Bot is operated by the server owner, administrators, and authorized staff for the Discord server where it is installed. The Bot is not affiliated with, endorsed by, or sponsored by Discord Inc.
 
@@ -28,7 +28,7 @@ The Bot may process Discord information that is made available through Discord p
 - Message content when needed for enabled features such as modmail, support tickets and their transcripts, no-link checks, AFK replies, message edit or delete logs, moderation context, staff applications, and command handling.
 - Attachment names, attachment URLs, and image indicators when messages are logged, relayed, or exported by enabled moderation, server-log, modmail, or ticket features.
 - Moderation records such as warnings, timeouts, kicks, bans, unbans, role changes, reasons, moderator IDs, target user IDs, durations, and timestamps.
-- Verification events, modmail session metadata, ticket ownership and claim metadata, staff or referee application responses, AFK reasons, custom command prefixes, auto-reaction settings, no-link channel settings, anti-raid events, and server statistics.
+- Verification events, modmail session metadata, ticket ownership and claim metadata, staff or referee application responses, suggestions, suggestion votes, NE Coins balances and transactions, shop purchases, reward fulfillment records, AFK reasons, custom command prefixes, auto-reaction settings, no-link channel settings, anti-raid events, and server statistics.
 - Server activity events such as member joins and leaves, role updates, channel updates, emoji updates, voice state changes, invite create or delete events, message edits, message deletes, and bulk deletes.
 
 The Bot does not ask for Discord passwords, Discord tokens, payment card details, government IDs, health information, or other sensitive information that is not needed for its stated server-management features.
@@ -44,7 +44,7 @@ The Bot uses processed information only to provide and maintain its server-manag
 - Reviewing staff or referee applications submitted through Bot modals.
 - Assigning verification roles when users complete the verification flow.
 - Detecting and blocking links in configured no-link channels.
-- Managing AFK notices, command prefixes, auto-reaction rules, QOTD posts, welcome messages, and server statistics.
+- Managing AFK notices, command prefixes, auto-reaction rules, QOTD posts, welcome messages, suggestions, NE Coins, shop rewards, and server statistics.
 - Troubleshooting errors, abuse, permission issues, rate limits, and operational problems.
 
 The Bot does not sell Discord API data, use it for targeted advertising, disclose it to data brokers, or use message content to train machine learning or AI models.
@@ -58,7 +58,7 @@ Depending on configuration, the Bot may store some data in:
 - Discord channels, threads, direct messages, forum threads, and audit-style log channels selected by server administrators.
 - Hosting, deployment, database, or logging infrastructure used to run the Bot.
 
-Stored data may include moderation logs, AFK statuses, command prefixes, auto-reaction settings, no-link channel settings, staff application submissions, modmail-related messages, ticket transcripts, and server-management records.
+Stored data may include moderation logs, AFK statuses, command prefixes, auto-reaction settings, no-link channel settings, staff application submissions, suggestions, suggestion votes, NE Coins balances and transactions, shop items, shop purchases, reward fulfillment records, modmail-related messages, ticket transcripts, and server-management records.
 
 Some information is only kept in memory while the Bot is running, such as temporary interaction state, active modmail sessions, application drafts before submission, cooldowns, and anti-raid state.
 
